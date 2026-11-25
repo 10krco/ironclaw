@@ -19,7 +19,11 @@ cd "$(dirname "$0")/.."
 echo "=== IronClaw Developer Setup ==="
 echo ""
 
-# 1. Check rustup
+# 1. Check rustup and Lefthook
+if ! command -v lefthook &>/dev/null; then
+    echo "ERROR: lefthook not found. Install it from https://lefthook.dev/installation/" >&2
+    exit 1
+fi
 if ! command -v rustup &>/dev/null; then
     echo "ERROR: rustup not found. Install from https://rustup.rs"
     exit 1
@@ -48,19 +52,64 @@ cargo test
 
 # 6. Install git hooks
 echo "[6/6] Installing git hooks..."
-HOOKS_DIR=$(git rev-parse --git-path hooks 2>/dev/null) || true
-if [ -n "$HOOKS_DIR" ]; then
-    mkdir -p "$HOOKS_DIR"
-    SCRIPTS_ABS="$(cd "$(dirname "$0")" && pwd)"
-    ln -sf "$SCRIPTS_ABS/commit-msg-regression.sh" "$HOOKS_DIR/commit-msg"
-    echo "  commit-msg hook installed (regression test enforcement)"
-    ln -sf "$SCRIPTS_ABS/pre-commit-safety.sh" "$HOOKS_DIR/pre-commit"
-    echo "  pre-commit hook installed (UTF-8, case-sensitivity, /tmp, redaction, composition-mass ratchet)"
-    REPO_ROOT="$(git rev-parse --show-toplevel)"
-    ln -sf "$REPO_ROOT/.githooks/pre-push" "$HOOKS_DIR/pre-push"
-    echo "  pre-push hook installed (merge check + CI-parity quality gate + Reborn coverage ratchet + WebUI provider replay + optional delta lint)"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+HOOKS_DIR="$(git rev-parse --git-path hooks)"
+
+if git config --get core.hooksPath >/dev/null; then
+    echo "ERROR: resolve the configured core.hooksPath before installing Lefthook." >&2
+    exit 1
+fi
+
+# Lefthook follows symlinks while writing hooks. Temporarily move only the
+# links created by the previous setup script and restore them on failure.
+legacy_hooks=()
+for hook in commit-msg pre-commit pre-push; do
+    hook_path="$HOOKS_DIR/$hook"
+    if [ -L "$hook_path" ]; then
+        case "$hook:$(readlink "$hook_path")" in
+            "commit-msg:$REPO_ROOT/scripts/commit-msg-regression.sh" | \
+            "pre-commit:$REPO_ROOT/scripts/pre-commit-safety.sh" | \
+            "pre-push:$REPO_ROOT/.githooks/pre-push")
+                legacy_hooks+=("$hook")
+                ;;
+            *)
+                echo "ERROR: resolve the existing hook symlink at $hook_path before installing Lefthook." >&2
+                exit 1
+                ;;
+        esac
+    fi
+done
+
+if [ "${#legacy_hooks[@]}" -eq 0 ]; then
+    lefthook install
 else
-    echo "  Skipped: not a git repository"
+    (
+        backup_dir="$(mktemp -d "$HOOKS_DIR/.lefthook-migration.XXXXXX")"
+        restore_hooks() {
+            local status=$? hook
+            if [ "$status" -ne 0 ]; then
+                for hook in "${legacy_hooks[@]}"; do
+                    if [ -L "$backup_dir/$hook" ]; then
+                        if ! { rm -f -- "$HOOKS_DIR/$hook" && mv -- "$backup_dir/$hook" "$HOOKS_DIR/"; }; then
+                            echo "ERROR: recover $hook from $backup_dir." >&2
+                        fi
+                    fi
+                done
+            else
+                for hook in "${legacy_hooks[@]}"; do
+                    rm -- "$backup_dir/$hook"
+                done
+            fi
+            rmdir -- "$backup_dir"
+        }
+        trap restore_hooks EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        for hook in "${legacy_hooks[@]}"; do
+            mv -- "$HOOKS_DIR/$hook" "$backup_dir/$hook"
+        done
+        lefthook install
+    )
 fi
 
 echo ""

@@ -1,0 +1,19 @@
+assert_lefthook_installed: true
+no_auto_install: true
+
+pre-commit:
+  jobs:
+    - name: development-system-staged_wit_versions
+      run: "'./.githooks/pre-commit'"
+    - name: development-system-staged_safety
+      run: "'./scripts/pre-commit-safety.sh'"
+
+pre-push:
+  jobs:
+    - name: development-system-fast_push
+      run: "'./.githooks/pre-push' 'origin' '--fast'"
+
+commit-msg:
+  jobs:
+    - name: regression-test
+      run: ./scripts/commit-msg-regression.sh "{1}"

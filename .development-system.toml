@@ -1,0 +1,111 @@
+schema_version = 3
+
+[delivery]
+mode = "pull-request"
+trunk_branch = "main"
+merge_method = "squash"
+
+[forge]
+provider = "git_hub"
+repository = "10krco/ironclaw"
+
+[signing]
+commit = true
+
+[features]
+tiber = true
+agentic_systems = true
+
+[scopes.rust_source]
+category = "source"
+include = ["crates/**/*.rs", "tools/ironclaw_silk_decoder/**/*.rs"]
+exclude = ["crates/**/tests/**", "crates/**/test_support/**", "crates/**/test_support.rs", "crates/**/*_test.rs", "crates/**/*_tests.rs", "crates/**/benches/**", "tools/ironclaw_silk_decoder/tests/**", "**/target/**"]
+
+[scopes.rust_contract_assets]
+category = "source"
+include = ["crates/**/prompts/*.md", "crates/**/wit/**/*.wit", "crates/extensions/packages/**/*.toml", "migrations/**/*.sql"]
+exclude = ["crates/**/tests/**", "**/target/**"]
+
+[scopes.webui_source]
+category = "source"
+include = ["crates/product/ironclaw_webui/frontend/src/**", "crates/product/ironclaw_webui/frontend/public/**", "crates/product/ironclaw_webui/frontend/index.html"]
+exclude = ["**/*.test.*", "**/*.spec.*", "**/__tests__/**", "**/node_modules/**"]
+
+[scopes.rust_tests]
+category = "tests"
+include = ["tests/**/*.rs", "tests/**/*.toml", "crates/**/tests/**", "crates/**/test_support/**", "crates/**/test_support.rs", "crates/**/*_test.rs", "crates/**/*_tests.rs", "crates/**/benches/**", "tools/ironclaw_silk_decoder/tests/**"]
+exclude = ["**/target/**", "**/node_modules/**"]
+
+[scopes.webui_tests]
+category = "tests"
+include = ["crates/product/ironclaw_webui/frontend/**/*.test.*", "crates/product/ironclaw_webui/frontend/**/*.spec.*", "crates/product/ironclaw_webui/frontend/**/__tests__/**", "crates/product/ironclaw_webui/frontend/e2e/**"]
+exclude = ["**/node_modules/**", "**/dist/**"]
+
+[scopes.e2e_tests]
+category = "tests"
+include = ["tests/e2e/**/*.py", "tests/e2e/**/*.json", "tests/e2e/**/*.yaml", "tests/e2e/**/*.yml", "tests/e2e/**/*.md"]
+exclude = ["**/.venv/**", "**/__pycache__/**", "**/node_modules/**", "**/AGENTS.md"]
+
+[scopes.documentation]
+category = "documentation"
+include = ["README.md", "CONTRIBUTING.md", "docs/**/*.md", "docs/**/*.mdx", "crates/**/README.md", "crates/**/CONTRACT.md", "crates/Architecture.md"]
+exclude = ["**/AGENTS.md", "**/CLAUDE.md"]
+
+[scopes.build_configuration]
+category = "developer_environment"
+include = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".nvmrc", "crates/**/Cargo.toml", "crates/product/ironclaw_webui/frontend/package.json", "crates/product/ironclaw_webui/frontend/pnpm-lock.yaml", "crates/product/ironclaw_webui/frontend/*config.*", "tests/e2e/uv.lock", "docker/reborn/**", "Dockerfile", "fly.toml"]
+exclude = ["**/target/**", "**/node_modules/**"]
+
+[scopes.build_output]
+category = "build_output"
+include = ["target/**", "crates/product/ironclaw_webui/frontend/dist/**", "crates/product/ironclaw_webui/frontend/node_modules/**", "tests/e2e/.venv/**"]
+
+[commands.staged_wit_versions]
+argv = ["./.githooks/pre-commit"]
+capability = "verification"
+network = "denied"
+
+[commands.staged_safety]
+argv = ["./scripts/pre-commit-safety.sh"]
+capability = "verification"
+network = "denied"
+
+[commands.fast_push]
+argv = ["./.githooks/pre-push", "origin", "--fast"]
+capability = "verification"
+network = "allowed"
+
+[commands.rust_format_check]
+argv = ["cargo", "fmt", "--all", "--", "--check"]
+capability = "verification"
+network = "denied"
+
+[commands.rust_clippy]
+argv = ["cargo", "clippy", "--locked", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"]
+capability = "verification"
+output_scopes = ["build_output"]
+network = "allowed"
+
+[commands.rust_package_test]
+argv = ["cargo", "test", "--locked", "--package", "{package}"]
+capability = "tests"
+parameters = { package = "string" }
+output_scopes = ["build_output"]
+network = "allowed"
+
+[commands.rust_workspace_tests]
+argv = ["cargo", "test", "--locked"]
+capability = "tests"
+output_scopes = ["build_output"]
+network = "allowed"
+
+[commands.docs_publication_boundary]
+argv = ["python3", "scripts/ci/docs_publication_boundary.py"]
+capability = "verification"
+network = "denied"
+
+[commands.webui_tests]
+argv = ["pnpm", "--dir", "crates/product/ironclaw_webui/frontend", "test"]
+capability = "tests"
+output_scopes = ["build_output"]
+network = "denied"

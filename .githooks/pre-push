@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Pre-push hook: runs quality gate before pushing
-# Skip with: git push --no-verify
+# Lefthook uses the fast checks on push. Run this script with a remote name
+# and omit --fast to run the full local CI-parity checks.
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 SCRIPT_DIR="$REPO_ROOT/scripts/ci"
@@ -57,8 +57,12 @@ run_ci_env() {
 
 check_merge_to_base_clean "${1:-origin}"
 
-# Default: baseline quality gate
-"$SCRIPT_DIR/quality_gate.sh"
+# Keep the full local quality gate available on demand.
+if [ "${2:-}" = "--fast" ]; then
+    cargo fmt --all -- --check
+else
+    "$SCRIPT_DIR/quality_gate.sh"
+fi
 
 # Fast static checks (no compile) — catch deterministic breakers that a
 # host-only build misses. See issue #6018.
@@ -70,6 +74,10 @@ echo "==> static: include_str! paths + Docker COPY coverage"
 "$SCRIPT_DIR/check-include-str-paths.sh"
 echo "==> static: hermetic env mutation"
 "$SCRIPT_DIR/check-hermetic-env.sh"
+
+if [ "${2:-}" = "--fast" ]; then
+    exit 0
+fi
 
 if [ "${IRONCLAW_PREPUSH_REBORN_COVERAGE_RATCHET:-1}" = "1" ]; then
     echo "==> reborn coverage ratchet (CI parity, heavy; skip with IRONCLAW_PREPUSH_REBORN_COVERAGE_RATCHET=0)"
