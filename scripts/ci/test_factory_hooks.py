@@ -143,6 +143,14 @@ class FactoryHooksTest(unittest.TestCase):
             '#!/bin/sh\nset -eu\nstaging="$(git config --get core.hooksPath)"\nshift 2\n'
             'for hook do printf "#!/bin/sh\\n" > "$staging/$hook"; chmod +x "$staging/$hook"; done\n',
         )
+        (linked / "lefthook.yml").unlink()
+        result = self.hook_setup()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("worktree has no lefthook.yml", result.stderr)
+        for hook in LEGACY_HOOKS:
+            self.assertFalse((self.hooks / hook).exists())
+        shutil.copy2(ROOT / "lefthook.yml", linked / "lefthook.yml")
+
         for count in (" +00", "-0", "00"):
             with self.subTest(count=count):
                 clean = self.hook_setup(GIT_CONFIG_COUNT=count)
@@ -151,6 +159,27 @@ class FactoryHooksTest(unittest.TestCase):
                 for hook in LEGACY_HOOKS:
                     self.assertTrue(os.access(self.hooks / hook, os.X_OK))
                     (self.hooks / hook).unlink()
+
+    def test_publish_failure_restores_replaced_hooks(self):
+        shutil.copy2(ROOT / "lefthook.yml", self.repo / "lefthook.yml")
+        target = self.repo / LEGACY_HOOKS["commit-msg"]
+        self.script(target, "#!/bin/sh\nexit 43\n")
+        (self.hooks / "commit-msg").symlink_to(target)
+        self.script(
+            self.workspace / "lefthook",
+            '#!/bin/sh\nset -eu\nstaging="$(git config --get core.hooksPath)"\nshift 2\n'
+            'for hook do printf "#!/bin/sh\\n" > "$staging/$hook"; chmod +x "$staging/$hook"; done\n',
+        )
+        self.script(
+            self.workspace / "mv",
+            '#!/bin/sh\ncase "$3" in */pre-push) exit 53;; esac\nexec "$REAL_MV" "$@"\n',
+        )
+        result = self.hook_setup(REAL_MV=shutil.which("mv"))
+        self.assertEqual(result.returncode, 53, result.stderr)
+        self.assertEqual((self.hooks / "commit-msg").readlink(), target)
+        self.assertFalse((self.hooks / "pre-commit").exists())
+        self.assertFalse((self.hooks / "pre-push").exists())
+        self.assertEqual(list(self.hooks.glob(".lefthook-migration.*")), [])
 
     def test_migration_preserves_installed_launcher_in_bare_repo_worktree(self):
         if not shutil.which("lefthook"):

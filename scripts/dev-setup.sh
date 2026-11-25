@@ -131,7 +131,7 @@ echo "[6/6] Installing git hooks..."
         fi
     done
 
-    if [[ -n "${legacy_hooks[0]-}" ]]; then
+    if [[ -n "${hooks_to_install[0]-}" ]]; then
         for worktree in "${allowed_worktrees[@]}"; do
             if [ ! -f "$worktree/lefthook.yml" ]; then
                 echo "ERROR: worktree has no lefthook.yml at $worktree. Update it or use a separate clone before migrating shared hooks." >&2
@@ -150,7 +150,27 @@ echo "[6/6] Installing git hooks..."
         # Preserve installed launchers, including any local edits to them.
         [[ -n "${hooks_to_install[0]-}" ]] || exit 0
         staging_dir="$(mktemp -d "$HOOKS_DIR/.lefthook-migration.XXXXXX")"
-        trap 'rm -rf -- "$staging_dir"' EXIT
+        publishing_hooks=0
+        cleanup_hook_install() {
+            local status="$1" hook restore_failed=0
+            if (( status != 0 && publishing_hooks )); then
+                for hook in "${hooks_to_install[@]}"; do
+                    # A launcher still in staging never replaced the live path.
+                    [ ! -e "$staging_dir/$hook" ] || continue
+                    if [ -L "$staging_dir/original/$hook" ]; then
+                        mv -f -- "$staging_dir/original/$hook" "$HOOKS_DIR/" || restore_failed=1
+                    else
+                        rm -f -- "$HOOKS_DIR/$hook" || restore_failed=1
+                    fi
+                done
+            fi
+            if (( restore_failed )); then
+                echo "ERROR: could not restore all hooks. Inspect the backups at $staging_dir/original before retrying setup." >&2
+            else
+                rm -rf -- "$staging_dir"
+            fi
+        }
+        trap 'cleanup_hook_install "$?"' EXIT
         trap 'exit 129' HUP
         trap 'exit 130' INT
         trap 'exit 143' TERM
@@ -177,7 +197,12 @@ echo "[6/6] Installing git hooks..."
                 exit 1
             fi
         done
-        # Replace each hook with a rename so Git always sees a complete launcher.
+        # Keep the previous links until every live hook has been published.
+        mkdir -- "$staging_dir/original"
+        for hook in ${legacy_hooks[@]+"${legacy_hooks[@]}"}; do
+            cp -P -- "$HOOKS_DIR/$hook" "$staging_dir/original/"
+        done
+        publishing_hooks=1
         for hook in "${hooks_to_install[@]}"; do
             mv -f -- "$staging_dir/$hook" "$HOOKS_DIR/"
         done
