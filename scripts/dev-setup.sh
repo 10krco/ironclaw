@@ -61,14 +61,23 @@ fi
 
 # Git shares hooks between worktrees. The old setup could have run in any of them.
 allowed_worktrees=()
+worktree=''
 while IFS= read -r -d '' entry; do
-    if [[ "$entry" == 'worktree '* ]]; then
-        allowed_worktrees+=("${entry#worktree }")
-    fi
+    case "$entry" in
+        'worktree '*) worktree="${entry#worktree }" ;;
+        bare) worktree='' ;;
+        '')
+            if [[ -n "$worktree" ]]; then
+                allowed_worktrees+=("$worktree")
+                worktree=''
+            fi
+            ;;
+    esac
 done < <(git worktree list --porcelain -z)
 
 # Lefthook follows hook symlinks. Remove only links created by the old setup.
 legacy_hooks=()
+hooks_to_install=()
 hook_paths=(commit-msg pre-commit pre-push commit-msg.old pre-commit.old pre-push.old)
 for hook in "${hook_paths[@]}"; do
     hook_path="$HOOKS_DIR/$hook"
@@ -80,6 +89,7 @@ for hook in "${hook_paths[@]}"; do
                 "pre-commit:$worktree/scripts/pre-commit-safety.sh" | \
                 "pre-push:$worktree/.githooks/pre-push")
                     legacy_hooks+=("$hook")
+                    hooks_to_install+=("$hook")
                     continue 2
                     ;;
             esac
@@ -93,6 +103,8 @@ for hook in "${hook_paths[@]}"; do
         ! grep -Fxq "call_lefthook run \"$hook\" \"\$@\"" "$hook_path"; then
         echo "ERROR: migrate the existing custom hook at $hook_path before installing Lefthook." >&2
         exit 1
+    elif [[ "$hook" != *.old ]] && [ ! -e "$hook_path" ]; then
+        hooks_to_install+=("$hook")
     fi
 done
 
@@ -106,12 +118,18 @@ if [[ -n "${legacy_hooks[0]-}" ]]; then
 fi
 
 (
+    # Preserve installed launchers, including any local edits to them.
+    [[ -n "${hooks_to_install[0]-}" ]] || exit 0
+    rollback_paths=()
+    for hook in "${hooks_to_install[@]}"; do
+        rollback_paths+=("$hook" "$hook.old")
+    done
     mkdir -p -- "$HOOKS_DIR"
     backup_dir="$(mktemp -d "$HOOKS_DIR/.lefthook-migration.XXXXXX")"
     install_started=false
     restore_hooks() {
         local status=$? hook
-        for hook in "${hook_paths[@]}"; do
+        for hook in "${rollback_paths[@]}"; do
             if [ "$status" -ne 0 ] && $install_started; then
                 if ! rm -f -- "$HOOKS_DIR/$hook"; then
                     echo "ERROR: recover $hook from $backup_dir." >&2
@@ -131,7 +149,7 @@ fi
     trap restore_hooks EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    for hook in "${hook_paths[@]}"; do
+    for hook in "${rollback_paths[@]}"; do
         if [ -e "$HOOKS_DIR/$hook" ] || [ -L "$HOOKS_DIR/$hook" ]; then
             cp -a -- "$HOOKS_DIR/$hook" "$backup_dir/"
         fi
@@ -142,7 +160,7 @@ fi
         rm -- "$HOOKS_DIR/$hook"
     done
     # Keep local Lefthook additions outside this project's rollback transaction.
-    lefthook install commit-msg pre-commit pre-push
+    lefthook install "${hooks_to_install[@]}"
 )
 
 echo ""

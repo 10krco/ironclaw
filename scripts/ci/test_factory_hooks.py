@@ -43,6 +43,14 @@ class FactoryHooksTest(unittest.TestCase):
         path.write_text(content)
         path.chmod(0o755)
 
+    def hook_setup(self, cwd=None):
+        setup = (ROOT / "scripts/dev-setup.sh").read_text()
+        stage = setup.split("# 6. Install git hooks\n", 1)[1].split("\necho \"\"\n# Codebase", 1)[0]
+        return subprocess.run(
+            ["bash", "--noprofile", "--norc", "-euc", stage],
+            cwd=cwd or self.repo, env=self.env, capture_output=True, text=True, timeout=20,
+        )
+
     def test_migration_restores_previous_hooks_after_partial_install(self):
         shutil.copy2(ROOT / "lefthook.yml", self.repo / "lefthook.yml")
         for hook, path in LEGACY_HOOKS.items():
@@ -55,16 +63,7 @@ class FactoryHooksTest(unittest.TestCase):
             "if [ \"$#\" -eq 1 ]; then printf 'local hook\\n' > .git/hooks/post-checkout; fi\n"
             "printf 'partial replacement\\n' > .git/hooks/pre-commit\nexit 53\n",
         )
-        setup = (ROOT / "scripts/dev-setup.sh").read_text()
-        stage = setup.split("# 6. Install git hooks\n", 1)[1].split("\necho \"\"\n# Codebase", 1)[0]
-
-        def run_setup(cwd=None):
-            return subprocess.run(
-                ["bash", "--noprofile", "--norc", "-euc", stage],
-                cwd=cwd or self.repo, env=self.env, capture_output=True, text=True, timeout=20,
-            )
-
-        self.assertEqual(run_setup().returncode, 53)
+        self.assertEqual(self.hook_setup().returncode, 53)
         self.assertFalse((self.hooks / "post-checkout").exists())
         for hook, path in LEGACY_HOOKS.items():
             self.assertEqual((self.hooks / hook).readlink(), self.repo / path)
@@ -74,7 +73,7 @@ class FactoryHooksTest(unittest.TestCase):
         replacement = self.hooks / "pre-push"
         replacement.unlink()
         self.script(replacement, "#!/bin/sh\n# Existing custom policy\nexit 0\n")
-        result = run_setup()
+        result = self.hook_setup()
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("existing custom hook", result.stderr)
         self.assertIn("# Existing custom policy", replacement.read_text())
@@ -83,17 +82,17 @@ class FactoryHooksTest(unittest.TestCase):
         self.script(replacement, '#!/bin/sh\ncall_lefthook run "pre-push" "$@"\n')
         self.script(
             self.workspace / "lefthook",
-            "#!/bin/sh\nmv .git/hooks/pre-push .git/hooks/pre-push.old\n"
-            "printf 'partial replacement\\n' > .git/hooks/pre-push\nexit 53\n",
+            "#!/bin/sh\n[ \"$*\" = 'install commit-msg pre-commit' ] || exit 54\n"
+            "printf 'partial replacement\\n' > .git/hooks/pre-commit\nexit 53\n",
         )
-        self.assertEqual(run_setup().returncode, 53)
+        self.assertEqual(self.hook_setup().returncode, 53)
         self.assertIn('call_lefthook run "pre-push"', replacement.read_text())
         self.assertFalse((self.hooks / "pre-push.old").exists())
 
         replacement.unlink()
         replacement.symlink_to(self.repo / LEGACY_HOOKS["pre-push"])
         self.git("config", "core.hooksPath", ".git/hooks")
-        result = run_setup()
+        result = self.hook_setup()
         self.assertEqual(result.returncode, 1)
         self.assertIn("configured core.hooksPath", result.stderr)
         for hook, path in LEGACY_HOOKS.items():
@@ -104,22 +103,49 @@ class FactoryHooksTest(unittest.TestCase):
         linked = self.workspace / "linked"
         self.git("worktree", "add", "-b", "linked", str(linked))
         self.script(self.workspace / "lefthook", "#!/bin/sh\nexit 53\n")
-        result = run_setup()
+        result = self.hook_setup()
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("worktree has no lefthook.yml", result.stderr)
         self.assertEqual((self.hooks / "pre-push").readlink(), self.repo / LEGACY_HOOKS["pre-push"])
 
         shutil.copy2(ROOT / "lefthook.yml", linked / "lefthook.yml")
-        result = run_setup(linked)
+        result = self.hook_setup(linked)
         self.assertEqual(result.returncode, 53, result.stderr)
         for hook, path in LEGACY_HOOKS.items():
             self.assertEqual((self.hooks / hook).readlink(), self.repo / path)
 
             (self.hooks / hook).unlink()
         self.script(self.workspace / "lefthook", "#!/bin/sh\nprintf 'clean install reached\\n'\n")
-        clean = run_setup()
+        clean = self.hook_setup()
         self.assertEqual(clean.returncode, 0, clean.stderr)
         self.assertIn("clean install reached", clean.stdout)
+
+    def test_migration_preserves_installed_launcher_in_bare_repo_worktree(self):
+        if not shutil.which("lefthook"):
+            self.skipTest("Lefthook is needed to verify installation")
+        self.git("commit", "--allow-empty", "-m", "test worktree baseline")
+        bare = self.workspace / "bare.git"
+        self.git("clone", "--bare", str(self.repo), str(bare))
+        linked = self.workspace / "linked"
+        self.git("worktree", "add", str(linked), "main", cwd=bare)
+        shutil.copy2(ROOT / "lefthook.yml", linked / "lefthook.yml")
+        subprocess.run(
+            ["lefthook", "install", "pre-commit"], cwd=linked, env=self.env,
+            check=True, capture_output=True, text=True, timeout=20,
+        )
+        hooks = bare / "hooks"
+        installed = hooks / "pre-commit"
+        customized = installed.read_text() + "\n# Retain local policy on rerun.\n"
+        installed.write_text(customized)
+        legacy = linked / LEGACY_HOOKS["commit-msg"]
+        self.script(legacy, "#!/bin/sh\nexit 0\n")
+        (hooks / "commit-msg").symlink_to(legacy)
+
+        result = self.hook_setup(linked)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(installed.read_text(), customized)
+        self.assertFalse((hooks / "commit-msg").is_symlink())
+        self.assertTrue((hooks / "pre-push").is_file())
 
     def test_only_tiber_updates_skip_source_gates(self):
         if not shutil.which("lefthook"):
