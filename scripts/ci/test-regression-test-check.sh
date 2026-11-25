@@ -248,6 +248,10 @@ fn preserves_the_reported_result() {
 }
 EOF
 expect_pass "meaningful Rust assertion" run_check "$meaningful"
+git -C "$meaningful" config diff.external false
+expect_pass "regression checker uses Git patch format despite external diff config" \
+  run_check "$meaningful"
+git -C "$meaningful" config --unset diff.external
 
 empty="$TMP_ROOT/empty"
 init_repo "$empty"

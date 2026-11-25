@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""Check Git hook migration and distinguish task-board pushes from source pushes."""
+
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+LEGACY_HOOKS = {
+    "commit-msg": "scripts/commit-msg-regression.sh",
+    "pre-commit": "scripts/pre-commit-safety.sh",
+    "pre-push": ".githooks/pre-push",
+}
+
+
+class FactoryHooksTest(unittest.TestCase):
+    def setUp(self):
+        workspace = tempfile.TemporaryDirectory(prefix="ironclaw-hooks-")
+        self.addCleanup(workspace.cleanup)
+        self.workspace = Path(workspace.name)
+        self.repo = self.workspace / "repo"
+        self.git("init", "--quiet", "-b", "main", str(self.repo), cwd=self.workspace)
+        self.hooks = self.repo / ".git/hooks"
+        self.env = dict(os.environ, PATH=f"{self.workspace}{os.pathsep}{os.environ['PATH']}")
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(
+            ["git", "-c", "commit.gpgsign=false", "-c", "user.name=Probe",
+             "-c", "user.email=probe@example.org", *args],
+            cwd=cwd or self.repo, env=getattr(self, "env", None),
+            check=True, capture_output=True, text=True, timeout=20,
+        )
+
+    def script(self, path, content):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        path.chmod(0o755)
+
+    def test_migration_restores_previous_hooks_after_partial_install(self):
+        for hook, path in LEGACY_HOOKS.items():
+            target = self.repo / path
+            self.script(target, "#!/bin/sh\nexit 0\n")
+            (self.hooks / hook).symlink_to(target)
+        self.script(
+            self.workspace / "lefthook",
+            "#!/bin/sh\nprintf 'partial replacement\\n' > .git/hooks/pre-commit\nexit 53\n",
+        )
+        setup = (ROOT / "scripts/dev-setup.sh").read_text()
+        stage = setup.split("# 6. Install git hooks\n", 1)[1].split("\necho \"\"\n# Codebase", 1)[0]
+
+        def run_setup():
+            return subprocess.run(
+                ["bash", "--noprofile", "--norc", "-ec", stage],
+                cwd=self.repo, env=self.env, capture_output=True, text=True, timeout=20,
+            )
+
+        self.assertEqual(run_setup().returncode, 53)
+        for hook, path in LEGACY_HOOKS.items():
+            self.assertEqual((self.hooks / hook).readlink(), self.repo / path)
+            self.assertEqual((self.repo / path).read_text(), "#!/bin/sh\nexit 0\n")
+
+        self.git("config", "core.hooksPath", ".git/hooks")
+        result = run_setup()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("configured core.hooksPath", result.stderr)
+        for hook, path in LEGACY_HOOKS.items():
+            self.assertEqual((self.hooks / hook).readlink(), self.repo / path)
+
+    def test_only_tiber_updates_skip_source_gates(self):
+        if not shutil.which("lefthook"):
+            self.skipTest("Lefthook is needed to exercise actual Git hook dispatch")
+        remote = self.workspace / "origin.git"
+        self.git("init", "--quiet", "--bare", str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        probe = self.repo / "probe.txt"
+        probe.write_text("base\n")
+        self.git("add", "probe.txt")
+        self.git("commit", "--quiet", "-m", "test base")
+        self.git("push", "--quiet", "origin", "main")
+        probe.write_text("changed\n")
+        self.git("add", "probe.txt")
+        self.git("commit", "--quiet", "-m", "test update")
+
+        (self.repo / ".githooks").mkdir()
+        for path in ("lefthook.yml", ".githooks/pre-push"):
+            shutil.copy2(ROOT / path, self.repo / path)
+        calls = self.workspace / "calls"
+        self.env["PROBE_CHECKS"] = str(calls)
+        for path in (
+            self.workspace / "cargo",
+            self.repo / "scripts/ci/check-include-str-paths.sh",
+            self.repo / "scripts/ci/check-hermetic-env.sh",
+        ):
+            self.script(path, "#!/bin/sh\nprintf 'check\\n' >> \"$PROBE_CHECKS\"\n")
+        subprocess.run(
+            ["lefthook", "install"], cwd=self.repo, env=self.env,
+            check=True, capture_output=True, timeout=20,
+        )
+
+        tiber_ref = "HEAD:refs/heads/tiber"
+        self.git("push", "--dry-run", "origin", tiber_ref)
+        self.assertFalse(calls.exists())
+        self.git("push", "--dry-run", "origin", tiber_ref, "HEAD:refs/heads/probe")
+        self.assertEqual(calls.read_text().splitlines(), ["check"] * 3)
+        calls.unlink()
+        self.git("push", "--quiet", "origin", tiber_ref)
+        self.git("push", "--dry-run", "origin", ":refs/heads/tiber")
+        self.assertEqual(calls.read_text().splitlines(), ["check"] * 3)
+
+        oid = self.git("rev-parse", "HEAD").stdout.strip()
+        board_update = f"HEAD {oid} refs/heads/tiber {'0' * len(oid)}\n"
+        for record in (board_update.rsplit(" ", 1)[0] + "\n", board_update + "HEAD"):
+            with self.subTest(record=record):
+                calls.unlink(missing_ok=True)
+                subprocess.run(
+                    ["./.githooks/pre-push", "origin", "--fast", "--git-hook"],
+                    input=record, cwd=self.repo, env=self.env, text=True,
+                    check=True, capture_output=True, timeout=20,
+                )
+                self.assertEqual(calls.read_text().splitlines(), ["check"] * 3)
+
+
+if __name__ == "__main__":
+    unittest.main()

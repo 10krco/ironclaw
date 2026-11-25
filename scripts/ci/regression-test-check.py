@@ -425,7 +425,7 @@ def resolve_prefixes(
 
 
 def added_text(repo: Path, base: str, head: str, path: str) -> str:
-    diff = git(repo, *diff_args(base, head), "--unified=40", "--", path)
+    diff = git(repo, *diff_args(base, head), "--no-ext-diff", "--unified=40", "--", path)
     added: list[str] = []
     for line in diff.splitlines():
         if line.startswith("+++") or not line.startswith("+"):

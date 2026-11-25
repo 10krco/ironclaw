@@ -11,7 +11,8 @@ pre-commit:
 pre-push:
   jobs:
     - name: development-system-fast_push
-      run: "'./.githooks/pre-push' 'origin' '--fast'"
+      run: "'./.githooks/pre-push' 'origin' '--fast' '--git-hook'"
+      use_stdin: true
 
 commit-msg:
   jobs:
