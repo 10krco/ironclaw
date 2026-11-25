@@ -19,4 +19,4 @@ pre-push:
 commit-msg:
   jobs:
     - name: regression-test
-      run: ./scripts/commit-msg-regression.sh "{1}"
+      run: './scripts/commit-msg-regression.sh "${IRONCLAW_HOOK_ARGUMENT:-$(git rev-parse --git-path COMMIT_EDITMSG)}"'

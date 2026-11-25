@@ -131,6 +131,29 @@ class FactoryHooksTest(unittest.TestCase):
         self.git("push", "--dry-run", "review's", "HEAD:refs/heads/probe")
         self.assertEqual(calls.read_text().splitlines(), ["check"] * 3)
 
+    def test_commit_message_path_in_linked_worktree(self):
+        if not shutil.which("lefthook"):
+            self.skipTest("Lefthook is needed to exercise actual Git hook dispatch")
+        self.git("commit", "--allow-empty", "-m", "test base")
+        worktree = self.workspace / "review$IRONCLAW_HOOK_PROBE-worktree"
+        self.git("worktree", "add", "-b", "probe", str(worktree))
+        for path in ("lefthook.yml", ".lefthookrc"):
+            shutil.copy2(ROOT / path, worktree / path)
+        for path in (".githooks/pre-commit", "scripts/pre-commit-safety.sh"):
+            self.script(worktree / path, "#!/bin/sh\nexit 0\n")
+        self.script(
+            worktree / "scripts/commit-msg-regression.sh",
+            '#!/bin/sh\nset -eu\ngrep -Fxq "chore: verify argument" "$1"\nprintf \'%s\\n\' "$1" > "$PROBE_COMMIT_MSG"\n',
+        )
+        message_argument = self.workspace / "message-argument"
+        self.env["PROBE_COMMIT_MSG"] = str(message_argument)
+        subprocess.run(
+            ["lefthook", "install"], cwd=worktree, env=self.env,
+            check=True, capture_output=True, timeout=20,
+        )
+        self.git("commit", "--allow-empty", "-m", "chore: verify argument", cwd=worktree)
+        self.assertIn(worktree.name, message_argument.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
