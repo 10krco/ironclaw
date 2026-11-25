@@ -155,8 +155,8 @@ echo "[6/6] Installing git hooks..."
                 exit 1
             fi
             if ! cmp -s lefthook.yml "$worktree/lefthook.yml" ||
-                { { [ -e .lefthookrc ] || [ -e "$worktree/.lefthookrc" ]; } &&
-                    ! cmp -s .lefthookrc "$worktree/.lefthookrc"; }; then
+                [ ! -f "$worktree/.lefthookrc" ] ||
+                ! cmp -s .lefthookrc "$worktree/.lefthookrc"; then
                 echo "ERROR: incompatible hook configuration at $worktree. Update it or use a separate clone before migrating shared hooks." >&2
                 exit 1
             fi

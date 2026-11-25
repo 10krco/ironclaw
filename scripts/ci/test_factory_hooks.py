@@ -32,19 +32,21 @@ class FactoryHooksTest(unittest.TestCase):
         self.addCleanup(workspace.cleanup)
         self.workspace = Path(workspace.name)
         self.repo = self.workspace / "repo"
-        self.git("init", "--quiet", "-b", "main", str(self.repo), cwd=self.workspace)
-        self.hooks = self.repo / ".git/hooks"
         self.env = dict(
             os.environ,
             PATH=f"{self.workspace}{os.pathsep}{os.environ['PATH']}",
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_CONFIG_NOSYSTEM="1",
             IRONCLAW_PREPUSH_MERGE_CHECK="1",
         )
+        self.git("init", "--quiet", "-b", "main", str(self.repo), cwd=self.workspace)
+        self.hooks = self.repo / ".git/hooks"
 
     def git(self, *args, cwd=None):
         return subprocess.run(
             ["git", "-c", "commit.gpgsign=false", "-c", "user.name=Probe",
              "-c", "user.email=probe@example.org", *args],
-            cwd=cwd or self.repo, env=getattr(self, "env", None),
+            cwd=cwd or self.repo, env=self.env,
             check=True, capture_output=True, text=True, timeout=20,
         )
 
@@ -67,6 +69,7 @@ class FactoryHooksTest(unittest.TestCase):
 
     def test_migration_preserves_previous_hooks_after_partial_install(self):
         shutil.copy2(ROOT / "lefthook.yml", self.repo / "lefthook.yml")
+        shutil.copy2(ROOT / ".lefthookrc", self.repo / ".lefthookrc")
         for hook, path in LEGACY_HOOKS.items():
             target = self.repo / path
             self.script(target, "#!/bin/sh\nexit 0\n")
@@ -135,7 +138,6 @@ class FactoryHooksTest(unittest.TestCase):
         self.assertEqual((self.hooks / "pre-push").readlink(), self.repo / LEGACY_HOOKS["pre-push"])
 
         shutil.copy2(ROOT / "lefthook.yml", linked / "lefthook.yml")
-        shutil.copy2(ROOT / ".lefthookrc", self.repo / ".lefthookrc")
         result = self.hook_setup()
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("incompatible hook configuration", result.stderr)
@@ -199,11 +201,17 @@ class FactoryHooksTest(unittest.TestCase):
         if not shutil.which("lefthook"):
             self.skipTest("Lefthook is needed to exercise local configuration")
         shutil.copy2(ROOT / "lefthook.yml", self.repo / "lefthook.yml")
-        (self.repo / "lefthook-local.yml").write_text("rc: ./custom-hook-rc\n")
         target = self.repo / LEGACY_HOOKS["commit-msg"]
         self.script(target, "#!/bin/sh\nexit 43\n")
         (self.hooks / "commit-msg").symlink_to(target)
 
+        result = self.hook_setup()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("incompatible hook configuration", result.stderr)
+        self.assertEqual((self.hooks / "commit-msg").readlink(), target)
+
+        shutil.copy2(ROOT / ".lefthookrc", self.repo / ".lefthookrc")
+        (self.repo / "lefthook-local.yml").write_text("rc: ./custom-hook-rc\n")
         result = self.hook_setup()
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("generated an incompatible Lefthook launcher", result.stderr)
@@ -213,6 +221,7 @@ class FactoryHooksTest(unittest.TestCase):
 
     def test_publish_failure_restores_replaced_hooks(self):
         shutil.copy2(ROOT / "lefthook.yml", self.repo / "lefthook.yml")
+        shutil.copy2(ROOT / ".lefthookrc", self.repo / ".lefthookrc")
         target = self.repo / LEGACY_HOOKS["commit-msg"]
         self.script(target, "#!/bin/sh\nexit 43\n")
         (self.hooks / "commit-msg").symlink_to(target)
@@ -240,6 +249,7 @@ class FactoryHooksTest(unittest.TestCase):
         linked = self.workspace / "linked"
         self.git("worktree", "add", str(linked), "main", cwd=bare)
         shutil.copy2(ROOT / "lefthook.yml", linked / "lefthook.yml")
+        shutil.copy2(ROOT / ".lefthookrc", linked / ".lefthookrc")
         subprocess.run(
             ["lefthook", "install", "pre-commit"], cwd=linked, env=self.env,
             check=True, capture_output=True, text=True, timeout=20,
@@ -281,6 +291,7 @@ class FactoryHooksTest(unittest.TestCase):
 
     def test_migration_restores_legacy_hooks_after_hangup(self):
         shutil.copy2(ROOT / "lefthook.yml", self.repo / "lefthook.yml")
+        shutil.copy2(ROOT / ".lefthookrc", self.repo / ".lefthookrc")
         for hook, path in LEGACY_HOOKS.items():
             target = self.repo / path
             self.script(target, "#!/bin/sh\nexit 0\n")
@@ -304,6 +315,7 @@ class FactoryHooksTest(unittest.TestCase):
         self.git("worktree", "add", "-b", "linked", str(linked))
         for checkout in (self.repo, linked):
             shutil.copy2(ROOT / "lefthook.yml", checkout / "lefthook.yml")
+            shutil.copy2(ROOT / ".lefthookrc", checkout / ".lefthookrc")
         for hook, path in LEGACY_HOOKS.items():
             target = self.repo / path
             self.script(target, "#!/bin/sh\nexit 43\n" if hook == "commit-msg" else "#!/bin/sh\nexit 0\n")
