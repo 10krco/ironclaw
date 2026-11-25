@@ -21,6 +21,9 @@ INSTALL_TEST_LAUNCHERS = (
     '  printf "%s\\n" "#!/bin/sh" "installed $hook" \\\n'
     "    '[ -f ./.lefthookrc ] && . ./.lefthookrc' \\\n"
     "    '# ERROR: Operation is aborted due to lefthook settings.' > \"$staging/$hook\"\n"
+    '  if [ "${OMIT_TEST_LAUNCHER_DISPATCH:-0}" != 1 ]; then\n'
+    "    printf 'call_lefthook run \"%s\" \"$@\"\\n' \"$hook\" >> \"$staging/$hook\"\n"
+    '  fi\n'
     '  chmod +x "$staging/$hook"\n'
     'done\n'
 )
@@ -229,6 +232,11 @@ class FactoryHooksTest(unittest.TestCase):
             self.workspace / "lefthook",
             "#!/bin/sh\nset -eu\n" + INSTALL_TEST_LAUNCHERS,
         )
+        result = self.hook_setup(OMIT_TEST_LAUNCHER_DISPATCH="1")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("generated an incompatible Lefthook launcher", result.stderr)
+        self.assertEqual((self.hooks / "commit-msg").readlink(), target)
+
         self.script(
             self.workspace / "mv",
             '#!/bin/sh\ncase "$3" in */pre-push) exit 53;; esac\nexec "$REAL_MV" "$@"\n',

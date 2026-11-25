@@ -99,6 +99,10 @@ echo "[6/6] Installing git hooks..."
         exit 1
     fi
 
+    launcher_dispatches_hook() {
+        grep -Fxq "call_lefthook run \"$2\" \"\$@\"" "$1"
+    }
+
     compatible_launcher() {
         grep -Fxq '[ -f ./.lefthookrc ] && . ./.lefthookrc' "$1" &&
             grep -Fq 'ERROR: Operation is aborted due to lefthook settings.' "$1"
@@ -131,7 +135,7 @@ echo "[6/6] Installing git hooks..."
         elif [[ "$hook" != *.old ]]; then
             if [ ! -e "$hook_path" ]; then
                 hooks_to_install+=("$hook")
-            elif ! grep -Fxq "call_lefthook run \"$hook\" \"\$@\"" "$hook_path"; then
+            elif ! launcher_dispatches_hook "$hook_path" "$hook"; then
                 echo "ERROR: migrate the existing custom hook at $hook_path before installing Lefthook." >&2
                 exit 1
             elif [ ! -x "$hook_path" ]; then
@@ -213,8 +217,8 @@ echo "[6/6] Installing git hooks..."
                 echo "ERROR: Lefthook did not generate an executable launcher for $hook." >&2
                 exit 1
             fi
-            if ! compatible_launcher "$launcher"; then
-                echo "ERROR: generated an incompatible Lefthook launcher for $hook. Check local overrides for rc and assert_lefthook_installed." >&2
+            if ! compatible_launcher "$launcher" || ! launcher_dispatches_hook "$launcher" "$hook"; then
+                echo "ERROR: generated an incompatible Lefthook launcher for $hook. Verify hook dispatch and local overrides for rc and assert_lefthook_installed." >&2
                 exit 1
             fi
         done
