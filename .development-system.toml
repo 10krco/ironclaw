@@ -94,7 +94,7 @@ output_scopes = ["build_output"]
 network = "allowed"
 
 [commands.rust_workspace_tests]
-argv = ["cargo", "test", "--locked"]
+argv = ["cargo", "test", "--locked", "--workspace"]
 capability = "tests"
 output_scopes = ["build_output"]
 network = "allowed"
