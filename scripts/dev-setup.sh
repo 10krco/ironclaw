@@ -155,6 +155,7 @@ fi
         rmdir -- "$backup_dir"
     }
     trap restore_hooks EXIT
+    trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
     for hook in "${rollback_paths[@]}"; do

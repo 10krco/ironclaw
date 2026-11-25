@@ -173,6 +173,23 @@ class FactoryHooksTest(unittest.TestCase):
         self.assertIn("existing Lefthook launcher is incompatible", result.stderr)
         self.assertEqual(installed.read_bytes(), stale_launcher)
 
+    def test_migration_restores_legacy_hooks_after_hangup(self):
+        shutil.copy2(ROOT / "lefthook.yml", self.repo / "lefthook.yml")
+        for hook, path in LEGACY_HOOKS.items():
+            target = self.repo / path
+            self.script(target, "#!/bin/sh\nexit 0\n")
+            (self.hooks / hook).symlink_to(target)
+        self.script(
+            self.workspace / "lefthook",
+            '#!/bin/sh\nprintf "partial replacement\\n" > .git/hooks/pre-commit\nkill -HUP "$PPID"\n',
+        )
+
+        result = self.hook_setup()
+        self.assertEqual(result.returncode, 129, result.stderr)
+        for hook, path in LEGACY_HOOKS.items():
+            self.assertEqual((self.hooks / hook).readlink(), self.repo / path)
+        self.assertEqual(list(self.hooks.glob(".lefthook-migration.*")), [])
+
     def test_only_tiber_updates_skip_source_gates(self):
         if not shutil.which("lefthook"):
             self.skipTest("Lefthook is needed to exercise actual Git hook dispatch")
