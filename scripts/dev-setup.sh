@@ -89,8 +89,21 @@ for hook in "${hook_paths[@]}"; do
     elif [ -e "$hook_path" ] && [ ! -f "$hook_path" ]; then
         echo "ERROR: resolve the existing hook path at $hook_path before installing Lefthook." >&2
         exit 1
+    elif [ -f "$hook_path" ] && [[ "$hook" != *.old ]] &&
+        ! grep -Fxq "call_lefthook run \"$hook\" \"\$@\"" "$hook_path"; then
+        echo "ERROR: migrate the existing custom hook at $hook_path before installing Lefthook." >&2
+        exit 1
     fi
 done
+
+if [[ -n "${legacy_hooks[0]-}" ]]; then
+    for worktree in "${allowed_worktrees[@]}"; do
+        if [ ! -f "$worktree/lefthook.yml" ]; then
+            echo "ERROR: worktree has no lefthook.yml at $worktree. Update it or use a separate clone before migrating shared hooks." >&2
+            exit 1
+        fi
+    done
+fi
 
 (
     mkdir -p -- "$HOOKS_DIR"

@@ -44,6 +44,7 @@ class FactoryHooksTest(unittest.TestCase):
         path.chmod(0o755)
 
     def test_migration_restores_previous_hooks_after_partial_install(self):
+        shutil.copy2(ROOT / "lefthook.yml", self.repo / "lefthook.yml")
         for hook, path in LEGACY_HOOKS.items():
             target = self.repo / path
             self.script(target, "#!/bin/sh\nexit 0\n")
@@ -73,13 +74,20 @@ class FactoryHooksTest(unittest.TestCase):
         replacement = self.hooks / "pre-push"
         replacement.unlink()
         self.script(replacement, "#!/bin/sh\n# Existing custom policy\nexit 0\n")
+        result = run_setup()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("existing custom hook", result.stderr)
+        self.assertIn("# Existing custom policy", replacement.read_text())
+        self.assertEqual((self.hooks / "pre-commit").readlink(), self.repo / LEGACY_HOOKS["pre-commit"])
+
+        self.script(replacement, '#!/bin/sh\ncall_lefthook run "pre-push" "$@"\n')
         self.script(
             self.workspace / "lefthook",
             "#!/bin/sh\nmv .git/hooks/pre-push .git/hooks/pre-push.old\n"
             "printf 'partial replacement\\n' > .git/hooks/pre-push\nexit 53\n",
         )
         self.assertEqual(run_setup().returncode, 53)
-        self.assertIn("# Existing custom policy", replacement.read_text())
+        self.assertIn('call_lefthook run "pre-push"', replacement.read_text())
         self.assertFalse((self.hooks / "pre-push.old").exists())
 
         replacement.unlink()
@@ -96,6 +104,12 @@ class FactoryHooksTest(unittest.TestCase):
         linked = self.workspace / "linked"
         self.git("worktree", "add", "-b", "linked", str(linked))
         self.script(self.workspace / "lefthook", "#!/bin/sh\nexit 53\n")
+        result = run_setup()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("worktree has no lefthook.yml", result.stderr)
+        self.assertEqual((self.hooks / "pre-push").readlink(), self.repo / LEGACY_HOOKS["pre-push"])
+
+        shutil.copy2(ROOT / "lefthook.yml", linked / "lefthook.yml")
         result = run_setup(linked)
         self.assertEqual(result.returncode, 53, result.stderr)
         for hook, path in LEGACY_HOOKS.items():
