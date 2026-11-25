@@ -259,6 +259,12 @@ class FactoryHooksTest(unittest.TestCase):
                 self.assertTrue(calls.exists(), "push skipped all source checks")
                 self.assertEqual(calls.read_text().splitlines(), ["check"] * 3)
 
+        calls.unlink()
+        self.git("rm", "--cached", "lefthook.yml")
+        self.git("push", "--dry-run", "review's", "HEAD:refs/heads/main")
+        self.assertTrue(calls.exists(), "an index-only config removal skipped all source checks")
+        self.assertEqual(calls.read_text().splitlines(), ["check"] * 3)
+
     def test_commit_message_path_in_linked_worktree(self):
         if not shutil.which("lefthook"):
             self.skipTest("Lefthook is needed to exercise actual Git hook dispatch")
