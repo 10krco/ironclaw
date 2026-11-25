@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Pre-commit hook: run version bump checks when WIT or extension sources change.
-# Install: git config core.hooksPath .githooks
+# Installed as a Lefthook job by scripts/dev-setup.sh.
 
 # Only run the check if relevant files are staged
 STAGED=$(git diff --cached --name-only)
@@ -22,7 +22,7 @@ fi
 
 if $NEEDS_CHECK; then
     echo "pre-commit: checking version bumps..."
-    if ! ./scripts/check-version-bumps.sh; then
+    if ! ./scripts/check-version-bumps.sh --staged; then
         echo ""
         echo "Commit blocked: version bump check failed."
         echo "Bump versions in the relevant registry JSON and/or WIT package declaration."

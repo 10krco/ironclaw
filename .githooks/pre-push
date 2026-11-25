@@ -10,17 +10,23 @@ SCRIPT_DIR="$REPO_ROOT/scripts/ci"
 # Git timeout is shorter than the source checks. Keep any other ref update
 # in the same push, including a deletion, on the normal verification path.
 tiber_only_push() {
-    local record local_ref local_oid remote_ref remote_oid extra saw_update=0
+    local payload record local_ref local_oid remote_ref remote_oid extra saw_update=0
     local oid_pattern='^([0-9a-f]{40}|[0-9a-f]{64})$'
+    # A successful NUL-delimited read indicates a binary, malformed record.
+    if IFS= read -r -d '' payload || [[ "$payload" != *$'\n' ]]; then
+        return 1
+    fi
     while IFS= read -r record; do
         read -r local_ref local_oid remote_ref remote_oid extra <<< "$record"
-        if [[ -z "$local_ref" || "$local_ref" == "(delete)" || "$remote_ref" != "refs/heads/tiber" || -n "$extra" ]] ||
+        if [[ "$local_ref" == "(delete)" || "$remote_ref" != "refs/heads/tiber" || -n "$extra" ||
+                "$record" != "$local_ref $local_oid $remote_ref $remote_oid" ]] ||
             [[ ! "$local_oid" =~ $oid_pattern || "$local_oid" =~ ^0+$ || ! "$remote_oid" =~ $oid_pattern ||
-                "${#local_oid}" -ne "${#remote_oid}" ]]; then
+                "${#local_oid}" -ne "${#remote_oid}" ]] ||
+            [[ "$(git rev-parse --verify --end-of-options "$local_ref" 2>/dev/null)" != "$local_oid" ]]; then
             return 1
         fi
         saw_update=1
-    done
+    done < <(printf '%s' "$payload")
     [[ -z "$record" && "$saw_update" -eq 1 ]]
 }
 

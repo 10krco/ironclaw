@@ -52,7 +52,6 @@ cargo test
 
 # 6. Install git hooks
 echo "[6/6] Installing git hooks..."
-REPO_ROOT="$(git rev-parse --show-toplevel)"
 HOOKS_DIR="$(git rev-parse --git-path hooks)"
 
 if git config --get core.hooksPath >/dev/null; then
@@ -60,57 +59,76 @@ if git config --get core.hooksPath >/dev/null; then
     exit 1
 fi
 
-# Lefthook follows symlinks while writing hooks. Temporarily move only the
-# links created by the previous setup script and restore them on failure.
+# Git shares hooks between worktrees. The old setup could have run in any of them.
+allowed_worktrees=()
+while IFS= read -r -d '' entry; do
+    if [[ "$entry" == 'worktree '* ]]; then
+        allowed_worktrees+=("${entry#worktree }")
+    fi
+done < <(git worktree list --porcelain -z)
+
+# Lefthook follows hook symlinks. Remove only links created by the old setup.
 legacy_hooks=()
-for hook in commit-msg pre-commit pre-push; do
+hook_paths=(commit-msg pre-commit pre-push commit-msg.old pre-commit.old pre-push.old)
+for hook in "${hook_paths[@]}"; do
     hook_path="$HOOKS_DIR/$hook"
     if [ -L "$hook_path" ]; then
-        case "$hook:$(readlink "$hook_path")" in
-            "commit-msg:$REPO_ROOT/scripts/commit-msg-regression.sh" | \
-            "pre-commit:$REPO_ROOT/scripts/pre-commit-safety.sh" | \
-            "pre-push:$REPO_ROOT/.githooks/pre-push")
-                legacy_hooks+=("$hook")
-                ;;
-            *)
-                echo "ERROR: resolve the existing hook symlink at $hook_path before installing Lefthook." >&2
-                exit 1
-                ;;
-        esac
+        target="$(readlink "$hook_path")"
+        for worktree in "${allowed_worktrees[@]}"; do
+            case "$hook:$target" in
+                "commit-msg:$worktree/scripts/commit-msg-regression.sh" | \
+                "pre-commit:$worktree/scripts/pre-commit-safety.sh" | \
+                "pre-push:$worktree/.githooks/pre-push")
+                    legacy_hooks+=("$hook")
+                    continue 2
+                    ;;
+            esac
+        done
+        echo "ERROR: resolve the existing hook symlink at $hook_path before installing Lefthook." >&2
+        exit 1
+    elif [ -e "$hook_path" ] && [ ! -f "$hook_path" ]; then
+        echo "ERROR: resolve the existing hook path at $hook_path before installing Lefthook." >&2
+        exit 1
     fi
 done
 
-if [ "${#legacy_hooks[@]}" -eq 0 ]; then
-    lefthook install
-else
-    (
-        backup_dir="$(mktemp -d "$HOOKS_DIR/.lefthook-migration.XXXXXX")"
-        restore_hooks() {
-            local status=$? hook
-            if [ "$status" -ne 0 ]; then
-                for hook in "${legacy_hooks[@]}"; do
-                    if [ -L "$backup_dir/$hook" ]; then
-                        if ! { rm -f -- "$HOOKS_DIR/$hook" && mv -- "$backup_dir/$hook" "$HOOKS_DIR/"; }; then
-                            echo "ERROR: recover $hook from $backup_dir." >&2
-                        fi
+(
+    mkdir -p -- "$HOOKS_DIR"
+    backup_dir="$(mktemp -d "$HOOKS_DIR/.lefthook-migration.XXXXXX")"
+    install_started=false
+    restore_hooks() {
+        local status=$? hook
+        for hook in "${hook_paths[@]}"; do
+            if [ "$status" -ne 0 ] && $install_started; then
+                if ! rm -f -- "$HOOKS_DIR/$hook"; then
+                    echo "ERROR: recover $hook from $backup_dir." >&2
+                    continue
+                fi
+                if [ -e "$backup_dir/$hook" ] || [ -L "$backup_dir/$hook" ]; then
+                    if ! mv -- "$backup_dir/$hook" "$HOOKS_DIR/"; then
+                        echo "ERROR: recover $hook from $backup_dir." >&2
                     fi
-                done
+                fi
             else
-                for hook in "${legacy_hooks[@]}"; do
-                    rm -- "$backup_dir/$hook"
-                done
+                rm -f -- "$backup_dir/$hook"
             fi
-            rmdir -- "$backup_dir"
-        }
-        trap restore_hooks EXIT
-        trap 'exit 130' INT
-        trap 'exit 143' TERM
-        for hook in "${legacy_hooks[@]}"; do
-            mv -- "$HOOKS_DIR/$hook" "$backup_dir/$hook"
         done
-        lefthook install
-    )
-fi
+        rmdir -- "$backup_dir"
+    }
+    trap restore_hooks EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    for hook in "${hook_paths[@]}"; do
+        if [ -e "$HOOKS_DIR/$hook" ] || [ -L "$HOOKS_DIR/$hook" ]; then
+            cp -a -- "$HOOKS_DIR/$hook" "$backup_dir/"
+        fi
+    done
+    install_started=true
+    for hook in "${legacy_hooks[@]}"; do
+        rm -- "$HOOKS_DIR/$hook"
+    done
+    lefthook install
+)
 
 echo ""
 # Codebase knowledge graph (codebase-memory MCP) — powers agent code discovery.

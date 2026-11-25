@@ -55,21 +55,46 @@ class FactoryHooksTest(unittest.TestCase):
         setup = (ROOT / "scripts/dev-setup.sh").read_text()
         stage = setup.split("# 6. Install git hooks\n", 1)[1].split("\necho \"\"\n# Codebase", 1)[0]
 
-        def run_setup():
+        def run_setup(cwd=None):
             return subprocess.run(
                 ["bash", "--noprofile", "--norc", "-ec", stage],
-                cwd=self.repo, env=self.env, capture_output=True, text=True, timeout=20,
+                cwd=cwd or self.repo, env=self.env, capture_output=True, text=True, timeout=20,
             )
 
         self.assertEqual(run_setup().returncode, 53)
         for hook, path in LEGACY_HOOKS.items():
             self.assertEqual((self.hooks / hook).readlink(), self.repo / path)
+
             self.assertEqual((self.repo / path).read_text(), "#!/bin/sh\nexit 0\n")
 
+        replacement = self.hooks / "pre-push"
+        replacement.unlink()
+        self.script(replacement, "#!/bin/sh\n# Existing custom policy\nexit 0\n")
+        self.script(
+            self.workspace / "lefthook",
+            "#!/bin/sh\nmv .git/hooks/pre-push .git/hooks/pre-push.old\n"
+            "printf 'partial replacement\\n' > .git/hooks/pre-push\nexit 53\n",
+        )
+        self.assertEqual(run_setup().returncode, 53)
+        self.assertIn("# Existing custom policy", replacement.read_text())
+        self.assertFalse((self.hooks / "pre-push.old").exists())
+
+        replacement.unlink()
+        replacement.symlink_to(self.repo / LEGACY_HOOKS["pre-push"])
         self.git("config", "core.hooksPath", ".git/hooks")
         result = run_setup()
         self.assertEqual(result.returncode, 1)
         self.assertIn("configured core.hooksPath", result.stderr)
+        for hook, path in LEGACY_HOOKS.items():
+            self.assertEqual((self.hooks / hook).readlink(), self.repo / path)
+
+        self.git("config", "--unset", "core.hooksPath")
+        self.git("commit", "--allow-empty", "-m", "test worktree baseline")
+        linked = self.workspace / "linked"
+        self.git("worktree", "add", "-b", "linked", str(linked))
+        self.script(self.workspace / "lefthook", "#!/bin/sh\nexit 53\n")
+        result = run_setup(linked)
+        self.assertEqual(result.returncode, 53, result.stderr)
         for hook, path in LEGACY_HOOKS.items():
             self.assertEqual((self.hooks / hook).readlink(), self.repo / path)
 
@@ -105,6 +130,8 @@ class FactoryHooksTest(unittest.TestCase):
         )
 
         tiber_ref = "HEAD:refs/heads/tiber"
+        self.git("push", "--dry-run", "origin", "HEAD~1:refs/heads/tiber")
+        self.assertFalse(calls.exists())
         self.git("push", "--dry-run", "origin", tiber_ref)
         self.assertFalse(calls.exists())
         self.git("push", "--dry-run", "origin", tiber_ref, "HEAD:refs/heads/probe")
@@ -116,7 +143,14 @@ class FactoryHooksTest(unittest.TestCase):
 
         oid = self.git("rev-parse", "HEAD").stdout.strip()
         board_update = f"HEAD {oid} refs/heads/tiber {'0' * len(oid)}\n"
-        for record in (board_update.rsplit(" ", 1)[0] + "\n", board_update + "HEAD"):
+        for record in (
+            board_update.rsplit(" ", 1)[0] + "\n",
+            board_update + "HEAD",
+            board_update.rstrip("\n") + "\t\n",
+            board_update.replace("HEAD ", "HEAD  ", 1),
+            board_update.replace("refs/heads/tiber", "refs/heads/ti\x00ber"),
+            board_update.replace("HEAD ", "refs/heads/invalid..branch ", 1),
+        ):
             with self.subTest(record=record):
                 calls.unlink(missing_ok=True)
                 subprocess.run(
@@ -153,6 +187,36 @@ class FactoryHooksTest(unittest.TestCase):
         )
         self.git("commit", "--allow-empty", "-m", "chore: verify argument", cwd=worktree)
         self.assertIn(worktree.name, message_argument.read_text())
+
+    def test_wit_version_check_uses_staged_contents(self):
+        wasm = self.repo / "crates/lanes/ironclaw_wasm"
+        wit = wasm / "wit/channel.wit"
+        wit.parent.mkdir(parents=True)
+        wit.write_text("package near:channel@1.0.0;\n")
+        self.git("add", str(wit))
+        self.git("commit", "-m", "test baseline")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.script(
+            self.repo / "scripts/ci/crate-dir.sh",
+            "#!/bin/sh\nprintf 'crates/lanes/ironclaw_wasm\\n'\n",
+        )
+        for path in ("scripts/check-version-bumps.sh", ".githooks/pre-commit"):
+            self.script(self.repo / path, (ROOT / path).read_text())
+
+        hook = self.repo / ".githooks/pre-commit"
+        wit.write_text("package near:channel@1.0.0;\n// ABI change\n")
+        self.git("add", str(wit))
+        wit.write_text("package near:channel@2.0.0;\n// ABI change\n")
+        env = dict(self.env, GITHUB_BASE_REF="main", ALLOW_SKIP_VERSION_CHECK="false")
+        rejected = subprocess.run([hook], cwd=self.repo, env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(rejected.returncode, 1, rejected.stdout)
+        self.assertIn("package version was not bumped", rejected.stdout)
+
+        self.git("add", str(wit))
+        wit.write_text("package near:channel@1.0.0;\n")
+        accepted = subprocess.run([hook], cwd=self.repo, env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(accepted.returncode, 0, accepted.stdout)
+        self.assertIn("package version bumped", accepted.stdout)
 
 
 if __name__ == "__main__":
