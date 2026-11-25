@@ -56,7 +56,7 @@ class FactoryHooksTest(unittest.TestCase):
             capture_output=True, text=True, timeout=20,
         )
 
-    def test_migration_restores_previous_hooks_after_partial_install(self):
+    def test_migration_preserves_previous_hooks_after_partial_install(self):
         shutil.copy2(ROOT / "lefthook.yml", self.repo / "lefthook.yml")
         for hook, path in LEGACY_HOOKS.items():
             target = self.repo / path
@@ -65,8 +65,8 @@ class FactoryHooksTest(unittest.TestCase):
         self.script(
             self.workspace / "lefthook",
             "#!/bin/sh\n"
-            "if [ \"$#\" -eq 1 ]; then printf 'local hook\\n' > .git/hooks/post-checkout; fi\n"
-            "printf 'partial replacement\\n' > .git/hooks/pre-commit\nexit 53\n",
+            'staging="$(git config --get core.hooksPath)"\n'
+            'printf "partial replacement\\n" > "$staging/pre-commit"\nexit 53\n',
         )
         self.assertEqual(self.hook_setup().returncode, 53)
         self.assertFalse((self.hooks / "post-checkout").exists())
@@ -92,8 +92,9 @@ class FactoryHooksTest(unittest.TestCase):
         )
         self.script(
             self.workspace / "lefthook",
-            "#!/bin/sh\n[ \"$*\" = 'install commit-msg pre-commit' ] || exit 54\n"
-            "printf 'partial replacement\\n' > .git/hooks/pre-commit\nexit 53\n",
+            "#!/bin/sh\n[ \"$*\" = 'install --force commit-msg pre-commit' ] || exit 54\n"
+            'staging="$(git config --get core.hooksPath)"\n'
+            'printf "partial replacement\\n" > "$staging/pre-commit"\nexit 53\n',
         )
         self.assertEqual(self.hook_setup().returncode, 53)
         self.assertIn('call_lefthook run "pre-push"', replacement.read_text())
@@ -125,10 +126,15 @@ class FactoryHooksTest(unittest.TestCase):
             self.assertEqual((self.hooks / hook).readlink(), self.repo / path)
 
             (self.hooks / hook).unlink()
-        self.script(self.workspace / "lefthook", "#!/bin/sh\nprintf 'clean install reached\\n'\n")
+        self.script(
+            self.workspace / "lefthook",
+            '#!/bin/sh\nset -eu\nstaging="$(git config --get core.hooksPath)"\nshift 2\n'
+            'for hook do printf "#!/bin/sh\\n" > "$staging/$hook"; chmod +x "$staging/$hook"; done\n',
+        )
         clean = self.hook_setup()
         self.assertEqual(clean.returncode, 0, clean.stderr)
-        self.assertIn("clean install reached", clean.stdout)
+        for hook in LEGACY_HOOKS:
+            self.assertTrue(os.access(self.hooks / hook, os.X_OK))
 
     def test_migration_preserves_installed_launcher_in_bare_repo_worktree(self):
         if not shutil.which("lefthook"):
@@ -186,7 +192,8 @@ class FactoryHooksTest(unittest.TestCase):
             (self.hooks / hook).symlink_to(target)
         self.script(
             self.workspace / "lefthook",
-            '#!/bin/sh\nprintf "partial replacement\\n" > .git/hooks/pre-commit\nkill -HUP "$PPID"\n',
+            '#!/bin/sh\nstaging="$(git config --get core.hooksPath)"\n'
+            'printf "partial replacement\\n" > "$staging/pre-commit"\nkill -HUP "$PPID"\n',
         )
 
         result = self.hook_setup()
@@ -204,7 +211,7 @@ class FactoryHooksTest(unittest.TestCase):
             shutil.copy2(ROOT / "lefthook.yml", checkout / "lefthook.yml")
         for hook, path in LEGACY_HOOKS.items():
             target = self.repo / path
-            self.script(target, "#!/bin/sh\nexit 0\n")
+            self.script(target, "#!/bin/sh\nexit 43\n" if hook == "commit-msg" else "#!/bin/sh\nexit 0\n")
             (self.hooks / hook).symlink_to(target)
         self.script(
             self.workspace / "lefthook",
@@ -212,8 +219,8 @@ class FactoryHooksTest(unittest.TestCase):
             '[ "${SECOND_SETUP:-}" != 1 ] || exit 53\n'
             'touch "$SETUP_STARTED"\n'
             'while [ ! -f "$SETUP_RELEASE" ]; do sleep 0.02; done\n'
-            'shift\n'
-            'for hook do printf "installed %s\\n" "$hook" > ".git/hooks/$hook"; done\n',
+            'staging="$(git config --get core.hooksPath)"\nshift 2\n'
+            'for hook do printf "installed %s\\n" "$hook" > "$staging/$hook"; chmod +x "$staging/$hook"; done\n',
         )
         started = self.workspace / "started"
         release = self.workspace / "release"
@@ -227,6 +234,9 @@ class FactoryHooksTest(unittest.TestCase):
                 while not started.exists() and first.poll() is None and time.monotonic() < deadline:
                     time.sleep(0.02)
                 self.assertTrue(started.exists(), "first setup never reached the installer")
+                with self.assertRaises(subprocess.CalledProcessError) as denied:
+                    self.git("commit", "--allow-empty", "-m", "must run legacy checks", cwd=linked)
+                self.assertEqual(denied.exception.returncode, 1, denied.exception.stderr)
                 second = self.hook_setup(linked, SECOND_SETUP="1")
                 self.assertEqual(second.returncode, 1, second.stderr)
                 self.assertIn("hook migration is already in progress", second.stderr)

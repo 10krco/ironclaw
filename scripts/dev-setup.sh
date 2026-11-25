@@ -143,47 +143,34 @@ echo "[6/6] Installing git hooks..."
     (
         # Preserve installed launchers, including any local edits to them.
         [[ -n "${hooks_to_install[0]-}" ]] || exit 0
-        rollback_paths=()
-        for hook in "${hooks_to_install[@]}"; do
-            rollback_paths+=("$hook" "$hook.old")
-        done
-        backup_dir="$(mktemp -d "$HOOKS_DIR/.lefthook-migration.XXXXXX")"
-        install_started=false
-        restore_hooks() {
-            local status=$? hook
-            for hook in "${rollback_paths[@]}"; do
-                if [ "$status" -ne 0 ] && $install_started; then
-                    if ! rm -f -- "$HOOKS_DIR/$hook"; then
-                        echo "ERROR: recover $hook from $backup_dir." >&2
-                        continue
-                    fi
-                    if [ -e "$backup_dir/$hook" ] || [ -L "$backup_dir/$hook" ]; then
-                        if ! mv -- "$backup_dir/$hook" "$HOOKS_DIR/"; then
-                            echo "ERROR: recover $hook from $backup_dir." >&2
-                        fi
-                    fi
-                else
-                    rm -f -- "$backup_dir/$hook"
-                fi
-            done
-            rmdir -- "$backup_dir"
-        }
-        trap restore_hooks EXIT
+        staging_dir="$(mktemp -d "$HOOKS_DIR/.lefthook-migration.XXXXXX")"
+        trap 'rm -rf -- "$staging_dir"' EXIT
         trap 'exit 129' HUP
         trap 'exit 130' INT
         trap 'exit 143' TERM
-        for hook in "${rollback_paths[@]}"; do
-            if [ -e "$HOOKS_DIR/$hook" ] || [ -L "$HOOKS_DIR/$hook" ]; then
-                cp -a -- "$HOOKS_DIR/$hook" "$backup_dir/"
+
+        # Override the hook destination for this installer process only.
+        # The staging directory shares a filesystem with the live hooks.
+        config_count="${GIT_CONFIG_COUNT:-0}"
+        if [[ "$config_count" == *[!0-9]* ]]; then
+            echo "ERROR: GIT_CONFIG_COUNT must be a nonnegative integer." >&2
+            exit 1
+        fi
+        env GIT_CONFIG_COUNT="$((10#$config_count + 1))" \
+            "GIT_CONFIG_KEY_${config_count}=core.hooksPath" \
+            "GIT_CONFIG_VALUE_${config_count}=$staging_dir" \
+            lefthook install --force "${hooks_to_install[@]}"
+        for hook in "${hooks_to_install[@]}"; do
+            launcher="$staging_dir/$hook"
+            if [ -L "$launcher" ] || [ ! -f "$launcher" ] || [ ! -x "$launcher" ]; then
+                echo "ERROR: Lefthook did not generate an executable launcher for $hook." >&2
+                exit 1
             fi
         done
-        install_started=true
-        # Bash 3.2 treats an empty array as unset under set -u.
-        for hook in ${legacy_hooks[@]+"${legacy_hooks[@]}"}; do
-            rm -- "$HOOKS_DIR/$hook"
+        # Replace each hook with a rename so Git always sees a complete launcher.
+        for hook in "${hooks_to_install[@]}"; do
+            mv -f -- "$staging_dir/$hook" "$HOOKS_DIR/"
         done
-        # Keep local Lefthook additions outside this project's rollback transaction.
-        lefthook install "${hooks_to_install[@]}"
     )
 )
 
