@@ -15,6 +15,15 @@ LEGACY_HOOKS = {
     "pre-commit": "scripts/pre-commit-safety.sh",
     "pre-push": ".githooks/pre-push",
 }
+INSTALL_TEST_LAUNCHERS = (
+    'staging="$(git config --get core.hooksPath)"\nshift 2\n'
+    'for hook do\n'
+    '  printf "%s\\n" "#!/bin/sh" "installed $hook" \\\n'
+    "    '[ -f ./.lefthookrc ] && . ./.lefthookrc' \\\n"
+    "    '# ERROR: Operation is aborted due to lefthook settings.' > \"$staging/$hook\"\n"
+    '  chmod +x "$staging/$hook"\n'
+    'done\n'
+)
 
 
 class FactoryHooksTest(unittest.TestCase):
@@ -140,8 +149,7 @@ class FactoryHooksTest(unittest.TestCase):
             (self.hooks / hook).unlink()
         self.script(
             self.workspace / "lefthook",
-            '#!/bin/sh\nset -eu\nstaging="$(git config --get core.hooksPath)"\nshift 2\n'
-            'for hook do printf "#!/bin/sh\\n" > "$staging/$hook"; chmod +x "$staging/$hook"; done\n',
+            "#!/bin/sh\nset -eu\n" + INSTALL_TEST_LAUNCHERS,
         )
         (linked / "lefthook.yml").unlink()
         result = self.hook_setup()
@@ -160,6 +168,49 @@ class FactoryHooksTest(unittest.TestCase):
                     self.assertTrue(os.access(self.hooks / hook, os.X_OK))
                     (self.hooks / hook).unlink()
 
+        shutil.rmtree(linked)
+        result = self.hook_setup()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("git worktree repair", result.stderr)
+        self.assertIn("git worktree prune --dry-run", result.stderr)
+        for hook in LEGACY_HOOKS:
+            self.assertFalse((self.hooks / hook).exists())
+
+    def test_migration_requires_a_successful_worktree_inventory(self):
+        shutil.copy2(ROOT / "lefthook.yml", self.repo / "lefthook.yml")
+        self.script(self.workspace / "lefthook", "#!/bin/sh\nexit 53\n")
+        real_git = shutil.which("git")
+        self.script(
+            self.workspace / "git",
+            '#!/bin/sh\n'
+            'if [ "$1" = worktree ] && [ "$2" = list ]; then\n'
+            '  "$REAL_GIT" "$@"\n'
+            '  exit 54\n'
+            'fi\nexec "$REAL_GIT" "$@"\n',
+        )
+        result = self.hook_setup(REAL_GIT=real_git)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("could not list Git worktrees", result.stderr)
+        for hook in LEGACY_HOOKS:
+            self.assertFalse((self.hooks / hook).exists())
+        self.assertFalse((self.hooks / ".ironclaw-lefthook-install.lock").exists())
+
+    def test_migration_rejects_incompatible_generated_launchers(self):
+        if not shutil.which("lefthook"):
+            self.skipTest("Lefthook is needed to exercise local configuration")
+        shutil.copy2(ROOT / "lefthook.yml", self.repo / "lefthook.yml")
+        (self.repo / "lefthook-local.yml").write_text("rc: ./custom-hook-rc\n")
+        target = self.repo / LEGACY_HOOKS["commit-msg"]
+        self.script(target, "#!/bin/sh\nexit 43\n")
+        (self.hooks / "commit-msg").symlink_to(target)
+
+        result = self.hook_setup()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("generated an incompatible Lefthook launcher", result.stderr)
+        self.assertEqual((self.hooks / "commit-msg").readlink(), target)
+        self.assertFalse((self.hooks / "pre-commit").exists())
+        self.assertFalse((self.hooks / "pre-push").exists())
+
     def test_publish_failure_restores_replaced_hooks(self):
         shutil.copy2(ROOT / "lefthook.yml", self.repo / "lefthook.yml")
         target = self.repo / LEGACY_HOOKS["commit-msg"]
@@ -167,8 +218,7 @@ class FactoryHooksTest(unittest.TestCase):
         (self.hooks / "commit-msg").symlink_to(target)
         self.script(
             self.workspace / "lefthook",
-            '#!/bin/sh\nset -eu\nstaging="$(git config --get core.hooksPath)"\nshift 2\n'
-            'for hook do printf "#!/bin/sh\\n" > "$staging/$hook"; chmod +x "$staging/$hook"; done\n',
+            "#!/bin/sh\nset -eu\n" + INSTALL_TEST_LAUNCHERS,
         )
         self.script(
             self.workspace / "mv",
@@ -264,8 +314,7 @@ class FactoryHooksTest(unittest.TestCase):
             '[ "${SECOND_SETUP:-}" != 1 ] || exit 53\n'
             'touch "$SETUP_STARTED"\n'
             'while [ ! -f "$SETUP_RELEASE" ]; do sleep 0.02; done\n'
-            'staging="$(git config --get core.hooksPath)"\nshift 2\n'
-            'for hook do printf "installed %s\\n" "$hook" > "$staging/$hook"; chmod +x "$staging/$hook"; done\n',
+            + INSTALL_TEST_LAUNCHERS,
         )
         started = self.workspace / "started"
         release = self.workspace / "release"
@@ -290,7 +339,7 @@ class FactoryHooksTest(unittest.TestCase):
                 _, stderr = first.communicate(timeout=20)
         self.assertEqual(first.returncode, 0, stderr)
         for hook in LEGACY_HOOKS:
-            self.assertEqual((self.hooks / hook).read_text(), f"installed {hook}\n")
+            self.assertIn(f"installed {hook}\n", (self.hooks / hook).read_text())
         self.assertFalse((self.hooks / ".ironclaw-lefthook-install.lock").exists())
 
     def test_only_tiber_updates_skip_source_gates(self):

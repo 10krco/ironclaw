@@ -69,12 +69,17 @@ echo "[6/6] Installing git hooks..."
         fi
         exit 1
     fi
-    trap 'rmdir -- "$hook_lock"' EXIT
+    worktree_inventory="$hook_lock/worktrees"
+    trap 'rm -f -- "$worktree_inventory"; rmdir -- "$hook_lock"' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
 
     # Git shares hooks between worktrees. The old setup could have run in any of them.
+    if ! git worktree list --porcelain -z > "$worktree_inventory"; then
+        echo "ERROR: could not list Git worktrees before installing shared hooks." >&2
+        exit 1
+    fi
     allowed_worktrees=()
     worktree=''
     while IFS= read -r -d '' entry; do
@@ -88,7 +93,16 @@ echo "[6/6] Installing git hooks..."
                 fi
                 ;;
         esac
-    done < <(git worktree list --porcelain -z)
+    done < "$worktree_inventory"
+    if [[ -z "${allowed_worktrees[0]-}" ]]; then
+        echo "ERROR: Git reported no checkouts before installing shared hooks." >&2
+        exit 1
+    fi
+
+    compatible_launcher() {
+        grep -Fxq '[ -f ./.lefthookrc ] && . ./.lefthookrc' "$1" &&
+            grep -Fq 'ERROR: Operation is aborted due to lefthook settings.' "$1"
+    }
 
     # Lefthook follows hook symlinks. Remove only links created by the old setup.
     legacy_hooks=()
@@ -123,8 +137,7 @@ echo "[6/6] Installing git hooks..."
             elif [ ! -x "$hook_path" ]; then
                 echo "ERROR: installed hook is not executable at $hook_path. Restore its execute permission before running setup." >&2
                 exit 1
-            elif ! grep -Fxq '[ -f ./.lefthookrc ] && . ./.lefthookrc' "$hook_path" ||
-                ! grep -Fq 'ERROR: Operation is aborted due to lefthook settings.' "$hook_path"; then
+            elif ! compatible_launcher "$hook_path"; then
                 echo "ERROR: existing Lefthook launcher is incompatible at $hook_path. Back it up, remove it, and rerun setup." >&2
                 exit 1
             fi
@@ -133,6 +146,10 @@ echo "[6/6] Installing git hooks..."
 
     if [[ -n "${hooks_to_install[0]-}" ]]; then
         for worktree in "${allowed_worktrees[@]}"; do
+            if [ ! -d "$worktree" ]; then
+                echo "ERROR: registered worktree is unavailable at $worktree. Restore its path, run 'git worktree repair' if it moved, or inspect 'git worktree prune --dry-run' if it was removed." >&2
+                exit 1
+            fi
             if [ ! -f "$worktree/lefthook.yml" ]; then
                 echo "ERROR: worktree has no lefthook.yml at $worktree. Update it or use a separate clone before migrating shared hooks." >&2
                 exit 1
@@ -194,6 +211,10 @@ echo "[6/6] Installing git hooks..."
             launcher="$staging_dir/$hook"
             if [ -L "$launcher" ] || [ ! -f "$launcher" ] || [ ! -x "$launcher" ]; then
                 echo "ERROR: Lefthook did not generate an executable launcher for $hook." >&2
+                exit 1
+            fi
+            if ! compatible_launcher "$launcher"; then
+                echo "ERROR: generated an incompatible Lefthook launcher for $hook. Check local overrides for rc and assert_lefthook_installed." >&2
                 exit 1
             fi
         done
