@@ -50,7 +50,9 @@ class FactoryHooksTest(unittest.TestCase):
             (self.hooks / hook).symlink_to(target)
         self.script(
             self.workspace / "lefthook",
-            "#!/bin/sh\nprintf 'partial replacement\\n' > .git/hooks/pre-commit\nexit 53\n",
+            "#!/bin/sh\n"
+            "if [ \"$#\" -eq 1 ]; then printf 'local hook\\n' > .git/hooks/post-checkout; fi\n"
+            "printf 'partial replacement\\n' > .git/hooks/pre-commit\nexit 53\n",
         )
         setup = (ROOT / "scripts/dev-setup.sh").read_text()
         stage = setup.split("# 6. Install git hooks\n", 1)[1].split("\necho \"\"\n# Codebase", 1)[0]
@@ -62,6 +64,7 @@ class FactoryHooksTest(unittest.TestCase):
             )
 
         self.assertEqual(run_setup().returncode, 53)
+        self.assertFalse((self.hooks / "post-checkout").exists())
         for hook, path in LEGACY_HOOKS.items():
             self.assertEqual((self.hooks / hook).readlink(), self.repo / path)
 
@@ -199,12 +202,13 @@ class FactoryHooksTest(unittest.TestCase):
         wit = wasm / "wit/channel.wit"
         wit.parent.mkdir(parents=True)
         wit.write_text("package near:channel@1.0.0;\n")
-        self.git("add", str(wit))
+        (wasm / "Cargo.toml").write_text('[package]\nname = "ironclaw_wasm"\n')
+        self.git("add", str(wasm))
         self.git("commit", "-m", "test baseline")
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
         self.script(
             self.repo / "scripts/ci/crate-dir.sh",
-            "#!/bin/sh\nprintf 'crates/lanes/ironclaw_wasm\\n'\n",
+            '#!/bin/sh\nfind crates -name Cargo.toml -path "*/$1/Cargo.toml" -exec dirname {} \\;\n',
         )
         for path in ("scripts/check-version-bumps.sh", ".githooks/pre-commit"):
             self.script(self.repo / path, (ROOT / path).read_text())
@@ -217,6 +221,14 @@ class FactoryHooksTest(unittest.TestCase):
         rejected = subprocess.run([hook], cwd=self.repo, env=env, capture_output=True, text=True, timeout=20)
         self.assertEqual(rejected.returncode, 1, rejected.stdout)
         self.assertIn("package version was not bumped", rejected.stdout)
+
+        other_family = self.repo / "crates/other"
+        other_family.mkdir()
+        moved = wasm.rename(other_family / wasm.name)
+        rejected = subprocess.run([hook], cwd=self.repo, env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(rejected.returncode, 1, rejected.stdout)
+        self.assertIn("package version was not bumped", rejected.stdout)
+        moved.rename(wasm)
 
         self.git("add", str(wit))
         wit.write_text("package near:channel@1.0.0;\n")

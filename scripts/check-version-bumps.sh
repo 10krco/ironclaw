@@ -157,7 +157,17 @@ WIT_CHANNEL_CHANGED=false
 # failure exits non-zero so "the crate moved" is an actionable repoint rather
 # than a quietly disabled gate.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WASM_CRATE_DIR=$("${SCRIPT_DIR}/ci/crate-dir.sh" ironclaw_wasm) || exit 1
+if $STAGED_CHECK; then
+    # Unstaged manifest moves must not redirect an index-only check.
+    WASM_MANIFEST=$(git ls-files -- ':(glob)crates/**/ironclaw_wasm/Cargo.toml')
+    if [[ -z "$WASM_MANIFEST" || "$WASM_MANIFEST" == *$'\n'* ]]; then
+        echo "ERROR: expected exactly one staged ironclaw_wasm manifest under crates/." >&2
+        exit 1
+    fi
+    WASM_CRATE_DIR="${WASM_MANIFEST%/Cargo.toml}"
+else
+    WASM_CRATE_DIR=$("${SCRIPT_DIR}/ci/crate-dir.sh" ironclaw_wasm) || exit 1
+fi
 WIT_TOOL_FILE="${WASM_CRATE_DIR}/wit/tool.wit"
 WIT_CHANNEL_FILE="${WASM_CRATE_DIR}/wit/channel.wit"
 

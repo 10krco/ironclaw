@@ -128,7 +128,8 @@ done
     for hook in ${legacy_hooks[@]+"${legacy_hooks[@]}"}; do
         rm -- "$HOOKS_DIR/$hook"
     done
-    lefthook install
+    # Keep local Lefthook additions outside this project's rollback transaction.
+    lefthook install commit-msg pre-commit pre-push
 )
 
 echo ""
