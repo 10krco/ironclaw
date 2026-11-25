@@ -1,0 +1,25 @@
+assert_lefthook_installed: true
+no_auto_install: true
+
+rc: ./.lefthookrc
+
+pre-commit:
+  jobs:
+    - name: development-system-staged_wit_versions
+      run: "'./.githooks/pre-commit'"
+    - name: development-system-staged_safety
+      run: "'./scripts/pre-commit-safety.sh'"
+
+pre-push:
+  jobs:
+    - name: development-system-fast_push
+      # A constant file argument makes Lefthook dispatch even for fileless pushes.
+      # The hook determines scope from Git's ref updates on stdin.
+      files: echo lefthook.yml
+      run: ': {files}; ./.githooks/pre-push "${IRONCLAW_HOOK_ARGUMENT:-origin}" --fast --git-hook'
+      use_stdin: true
+
+commit-msg:
+  jobs:
+    - name: regression-test
+      run: './scripts/commit-msg-regression.sh "${IRONCLAW_HOOK_ARGUMENT:-$(git rev-parse --git-path COMMIT_EDITMSG)}"'

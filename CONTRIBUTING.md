@@ -8,7 +8,17 @@ cd ironclaw
 ./scripts/dev-setup.sh
 ```
 
-This installs the Rust toolchain, WASM targets, git hooks, and runs initial checks.
+Install [Lefthook](https://lefthook.dev/installation/) before running setup.
+The script installs the WASM target and Git hooks and runs initial checks.
+Git shares installed hooks across linked worktrees. Update each checkout to a
+revision with matching `lefthook.yml` and `.lefthookrc` before installing or
+migrating hooks. Use a separate clone to keep working on older branches. Move
+custom hook commands into Lefthook's local configuration before running setup.
+If setup reports an incompatible Lefthook launcher, back it up and remove it
+before rerunning setup. Keep any local checks in Lefthook's local configuration.
+The push hook checks merge conflicts against the push remote's `main`, Rust
+formatting, and static repository checks. Run `./.githooks/pre-push origin` for the
+full local CI-parity checks, including coverage and provider replay.
 
 ## How to Contribute
 

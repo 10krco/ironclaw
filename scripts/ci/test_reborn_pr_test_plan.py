@@ -1946,7 +1946,7 @@ class RebornPrTestPlanTests(unittest.TestCase):
                 )
 
     def test_classified_operator_paths_do_not_mask_a_real_lane(self) -> None:
-        """Neither classification may swallow its neighbours.
+        """Local-tooling and operator classifications may not swallow their neighbours.
 
         The planner raises on the *first* unclassified path in sorted order, so
         a per-PR shortcut would look identical to a per-path rule on the diff
@@ -1956,13 +1956,21 @@ class RebornPrTestPlanTests(unittest.TestCase):
         plan = self.plan(
             "pull_request",
             [
+                ".development-system.toml",
                 ".env.example",
+                ".lefthookrc",
                 "docker/reborn/entrypoint.sh",
                 "docker/reborn/start-sshd.sh",
+                "lefthook.yml",
+                "scripts/dev-setup.sh",
                 "crates/alpha/src/lib.rs",
             ],
         )
         self.assertEqual(plan["mode"], "selected")
+        self.assertIn(
+            "static CI or workspace-policy checks own: .development-system.toml",
+            plan["reasons"],
+        )
         self.assertEqual(plan["changed_packages"], ["alpha"])
         self.assertNotEqual(plan["crate_buckets"], [])
 

@@ -1,10 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Pre-push hook: runs quality gate before pushing
-# Skip with: git push --no-verify
+# Lefthook uses the fast checks on push. Run this script with a remote name
+# and omit --fast to run the full local CI-parity checks.
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 SCRIPT_DIR="$REPO_ROOT/scripts/ci"
+
+# Tiber publishes board transactions independently of source branches. Its
+# Git timeout is shorter than the source checks. Keep any other ref update
+# in the same push, including a deletion, on the normal verification path.
+tiber_only_push() {
+    local payload record local_ref local_oid remote_ref remote_oid extra saw_update=0
+    local oid_pattern='^([0-9a-f]{40}|[0-9a-f]{64})$'
+    # A successful NUL-delimited read indicates a binary, malformed record.
+    if IFS= read -r -d '' payload || [[ "$payload" != *$'\n' ]]; then
+        return 1
+    fi
+    while IFS= read -r record; do
+        read -r local_ref local_oid remote_ref remote_oid extra <<< "$record"
+        if [[ "$local_ref" == "(delete)" || "$remote_ref" != "refs/heads/tiber" || -n "$extra" ||
+                "$record" != "$local_ref $local_oid $remote_ref $remote_oid" ]] ||
+            [[ ! "$local_oid" =~ $oid_pattern || "$local_oid" =~ ^0+$ || ! "$remote_oid" =~ $oid_pattern ||
+                "${#local_oid}" -ne "${#remote_oid}" ]] ||
+            [[ "$(git rev-parse --verify --end-of-options "$local_ref" 2>/dev/null)" != "$local_oid" ]]; then
+            return 1
+        fi
+        saw_update=1
+    done < <(printf '%s' "$payload")
+    [[ -z "$record" && "$saw_update" -eq 1 ]]
+}
+
+if [ "${2:-}" = "--fast" ] && [ "${3:-}" = "--git-hook" ] && tiber_only_push; then
+    echo "==> Tiber board push: no source refs to check"
+    exit 0
+fi
 
 check_merge_to_base_clean() {
     if [ "${IRONCLAW_PREPUSH_MERGE_CHECK:-1}" = "0" ]; then
@@ -57,8 +86,12 @@ run_ci_env() {
 
 check_merge_to_base_clean "${1:-origin}"
 
-# Default: baseline quality gate
-"$SCRIPT_DIR/quality_gate.sh"
+# Keep the full local quality gate available on demand.
+if [ "${2:-}" = "--fast" ]; then
+    cargo fmt --all -- --check
+else
+    "$SCRIPT_DIR/quality_gate.sh"
+fi
 
 # Fast static checks (no compile) — catch deterministic breakers that a
 # host-only build misses. See issue #6018.
@@ -70,6 +103,10 @@ echo "==> static: include_str! paths + Docker COPY coverage"
 "$SCRIPT_DIR/check-include-str-paths.sh"
 echo "==> static: hermetic env mutation"
 "$SCRIPT_DIR/check-hermetic-env.sh"
+
+if [ "${2:-}" = "--fast" ]; then
+    exit 0
+fi
 
 if [ "${IRONCLAW_PREPUSH_REBORN_COVERAGE_RATCHET:-1}" = "1" ]; then
     echo "==> reborn coverage ratchet (CI parity, heavy; skip with IRONCLAW_PREPUSH_REBORN_COVERAGE_RATCHET=0)"

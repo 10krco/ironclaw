@@ -217,6 +217,34 @@ jobs:
               --selection-only
           fi
 
+  git-hook-contract:
+    name: Git hook contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - name: Install Lefthook 2.2.2
+        run: |
+          set -euo pipefail
+          bin_dir="$RUNNER_TEMP/git-hook-contract"
+          mkdir -p "$bin_dir"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/evilmartians/lefthook/releases/download/v2.2.2/lefthook_2.2.2_Linux_x86_64 \
+            --output "$bin_dir/lefthook"
+          printf '%s  %s\n' \
+            4fbf89eb7748c6aed84d833ee1a29edac48fae614468ca9a82896ec32f2800b6 \
+            "$bin_dir/lefthook" | sha256sum --check --status
+          chmod +x "$bin_dir/lefthook"
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+      - name: Verify Git hook migration and dispatch
+        run: |
+          set -euo pipefail
+          lefthook validate
+          python3 scripts/ci/test_factory_hooks.py
+
   crate-tests:
     name: Test Reborn crate bucket (${{ matrix.bucket.name }})
     needs: changes
@@ -1223,6 +1251,7 @@ jobs:
     if: always()
     needs:
       - changes
+      - git-hook-contract
       - crate-tests
       - root-reborn-parity-tests
       - reborn-integration-coverage
@@ -1245,6 +1274,10 @@ jobs:
 
           if [[ "${{ needs.changes.result }}" != "success" ]]; then
             echo "changes failed: ${{ needs.changes.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.git-hook-contract.result }}" != "success" ]]; then
+            echo "Git hook contract failed: ${{ needs.git-hook-contract.result }}"
             exit 1
           fi
 

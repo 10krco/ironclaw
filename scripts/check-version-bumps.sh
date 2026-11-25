@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# CI script: check that version bumps accompany WIT or extension source changes.
+# Check that version bumps accompany WIT or extension source changes.
+# --staged reads the Git index for use from the pre-commit hook.
 # Exit 0 if all checks pass, exit 1 if any version wasn't bumped.
 
 ERRORS=0
 ALLOW_SKIP_VERSION_CHECK="${ALLOW_SKIP_VERSION_CHECK:-true}"
 RAW_BASE_BRANCH="${GITHUB_BASE_REF:-main}"
 BASE_BRANCH="${RAW_BASE_BRANCH#refs/heads/}"
+STAGED_CHECK=false
+if [[ "${1:-}" == "--staged" ]]; then
+    STAGED_CHECK=true
+fi
 
 # Ensure the base branch ref is available for skip checks and diffs.
 if ! git rev-parse "origin/${BASE_BRANCH}" >/dev/null 2>&1; then
+    if $STAGED_CHECK; then
+        echo "ERROR: origin/${BASE_BRANCH} is missing. Run git fetch origin ${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH} to fetch it before running the staged version check." >&2
+        exit 1
+    fi
     echo "Fetching origin/${BASE_BRANCH}..."
     git fetch origin "$BASE_BRANCH" --depth=1
 fi
@@ -37,7 +46,11 @@ fi
 
 echo "Base branch: $BASE_BRANCH"
 
-CHANGED_FILES=$(git diff --name-only "$MERGE_BASE" HEAD)
+if $STAGED_CHECK; then
+    CHANGED_FILES=$(git diff --cached --name-only "$MERGE_BASE")
+else
+    CHANGED_FILES=$(git diff --name-only "$MERGE_BASE" HEAD)
+fi
 
 if [[ -z "$CHANGED_FILES" ]]; then
     echo "No changed files detected. Nothing to check."
@@ -45,6 +58,24 @@ if [[ -z "$CHANGED_FILES" ]]; then
 fi
 
 # --- Helper functions ---------------------------------------------------------
+
+candidate_content() {
+    if [[ "$STAGED_CHECK" == "true" ]]; then
+        git show ":$1" 2>/dev/null || true
+    elif [[ -f "$1" ]]; then
+        cat "$1"
+    fi
+}
+
+candidate_path_exists() {
+    if [[ "$STAGED_CHECK" == "true" ]]; then
+        [[ -n "$(git ls-files -- "$1")" ]]
+    elif [[ "$1" == */ ]]; then
+        [[ -d "$1" ]]
+    else
+        [[ -f "$1" ]]
+    fi
+}
 
 # Extract the version from a WIT package line like: package near:agent@1.2.3;
 #
@@ -57,11 +88,7 @@ fi
 # so the enforced Linux CI lane is unchanged.
 extract_wit_version() {
     local file="$1"
-    if [[ ! -f "$file" ]]; then
-        echo ""
-        return
-    fi
-    sed -n 's/^[[:space:]]*package[[:space:]][[:space:]]*[^@]*@\([0-9][0-9.]*[0-9]\)[[:space:]]*;.*/\1/p' "$file" \
+    candidate_content "$file" | sed -n 's/^[[:space:]]*package[[:space:]][[:space:]]*[^@]*@\([0-9][0-9.]*[0-9]\)[[:space:]]*;.*/\1/p' \
         | head -n1
 }
 
@@ -77,22 +104,14 @@ extract_wit_version_base() {
 extract_rust_const() {
     local file="$1"
     local const_name="$2"
-    if [[ ! -f "$file" ]]; then
-        echo ""
-        return
-    fi
-    sed -n "s/^.*${const_name}[[:space:]]*:[[:space:]]*&str[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$file" \
+    candidate_content "$file" | sed -n "s/^.*${const_name}[[:space:]]*:[[:space:]]*&str[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
         | head -n1
 }
 
 # Extract JSON "version" field using jq
 extract_json_version() {
     local file="$1"
-    if [[ ! -f "$file" ]]; then
-        echo ""
-        return
-    fi
-    jq -r '.version // empty' "$file" 2>/dev/null || true
+    candidate_content "$file" | jq -r '.version // empty' 2>/dev/null || true
 }
 
 # Extract JSON "version" from the base branch copy of a file
@@ -138,7 +157,17 @@ WIT_CHANNEL_CHANGED=false
 # failure exits non-zero so "the crate moved" is an actionable repoint rather
 # than a quietly disabled gate.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WASM_CRATE_DIR=$("${SCRIPT_DIR}/ci/crate-dir.sh" ironclaw_wasm) || exit 1
+if $STAGED_CHECK; then
+    # Unstaged manifest moves must not redirect an index-only check.
+    WASM_MANIFEST=$(git ls-files -- ':(glob)crates/**/ironclaw_wasm/Cargo.toml')
+    if [[ -z "$WASM_MANIFEST" || "$WASM_MANIFEST" == *$'\n'* ]]; then
+        echo "ERROR: expected exactly one staged ironclaw_wasm manifest under crates/." >&2
+        exit 1
+    fi
+    WASM_CRATE_DIR="${WASM_MANIFEST%/Cargo.toml}"
+else
+    WASM_CRATE_DIR=$("${SCRIPT_DIR}/ci/crate-dir.sh" ironclaw_wasm) || exit 1
+fi
 WIT_TOOL_FILE="${WASM_CRATE_DIR}/wit/tool.wit"
 WIT_CHANNEL_FILE="${WASM_CRATE_DIR}/wit/channel.wit"
 
@@ -220,12 +249,12 @@ for tool in $TOOL_NAMES; do
     echo ""
     echo "  --- tools-src/${tool}/ changed ---"
 
-    if [[ ! -d "tools-src/${tool}" ]]; then
+    if ! candidate_path_exists "tools-src/${tool}/"; then
         echo "  SKIP: tools-src/${tool}/ no longer exists (retired local source)."
         continue
     fi
 
-    if [[ ! -f "$REGISTRY_FILE" ]]; then
+    if ! candidate_path_exists "$REGISTRY_FILE"; then
         echo "  SKIP: ${REGISTRY_FILE} does not exist yet (new extension?)."
         continue
     fi
@@ -257,12 +286,12 @@ for channel in $CHANNEL_NAMES; do
     echo ""
     echo "  --- channels-src/${channel}/ changed ---"
 
-    if [[ ! -d "channels-src/${channel}" ]]; then
+    if ! candidate_path_exists "channels-src/${channel}/"; then
         echo "  SKIP: channels-src/${channel}/ no longer exists (retired local source)."
         continue
     fi
 
-    if [[ ! -f "$REGISTRY_FILE" ]]; then
+    if ! candidate_path_exists "$REGISTRY_FILE"; then
         echo "  SKIP: ${REGISTRY_FILE} does not exist yet (new extension?)."
         continue
     fi
