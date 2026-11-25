@@ -24,7 +24,11 @@ class FactoryHooksTest(unittest.TestCase):
         self.repo = self.workspace / "repo"
         self.git("init", "--quiet", "-b", "main", str(self.repo), cwd=self.workspace)
         self.hooks = self.repo / ".git/hooks"
-        self.env = dict(os.environ, PATH=f"{self.workspace}{os.pathsep}{os.environ['PATH']}")
+        self.env = dict(
+            os.environ,
+            PATH=f"{self.workspace}{os.pathsep}{os.environ['PATH']}",
+            IRONCLAW_PREPUSH_MERGE_CHECK="1",
+        )
 
     def git(self, *args, cwd=None):
         return subprocess.run(
@@ -85,7 +89,7 @@ class FactoryHooksTest(unittest.TestCase):
         self.git("commit", "--quiet", "-m", "test update")
 
         (self.repo / ".githooks").mkdir()
-        for path in ("lefthook.yml", ".githooks/pre-push"):
+        for path in ("lefthook.yml", ".lefthookrc", ".githooks/pre-push"):
             shutil.copy2(ROOT / path, self.repo / path)
         calls = self.workspace / "calls"
         self.env["PROBE_CHECKS"] = str(calls)
@@ -121,6 +125,11 @@ class FactoryHooksTest(unittest.TestCase):
                     check=True, capture_output=True, timeout=20,
                 )
                 self.assertEqual(calls.read_text().splitlines(), ["check"] * 3)
+
+        calls.unlink()
+        self.git("remote", "rename", "origin", "review's")
+        self.git("push", "--dry-run", "review's", "HEAD:refs/heads/probe")
+        self.assertEqual(calls.read_text().splitlines(), ["check"] * 3)
 
 
 if __name__ == "__main__":

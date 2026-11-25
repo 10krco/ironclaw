@@ -1,0 +1,3 @@
+# Preserve Git's first hook argument through the generated launcher. Lefthook
+# substitutes command templates as shell text, which is unsafe for remote names.
+export IRONCLAW_HOOK_ARGUMENT="${1-}"

@@ -1,6 +1,8 @@
 assert_lefthook_installed: true
 no_auto_install: true
 
+rc: ./.lefthookrc
+
 pre-commit:
   jobs:
     - name: development-system-staged_wit_versions
@@ -11,7 +13,7 @@ pre-commit:
 pre-push:
   jobs:
     - name: development-system-fast_push
-      run: "'./.githooks/pre-push' 'origin' '--fast' '--git-hook'"
+      run: './.githooks/pre-push "${IRONCLAW_HOOK_ARGUMENT:-origin}" --fast --git-hook'
       use_stdin: true
 
 commit-msg:
