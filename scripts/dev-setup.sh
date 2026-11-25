@@ -99,12 +99,16 @@ for hook in "${hook_paths[@]}"; do
     elif [ -e "$hook_path" ] && [ ! -f "$hook_path" ]; then
         echo "ERROR: resolve the existing hook path at $hook_path before installing Lefthook." >&2
         exit 1
-    elif [ -f "$hook_path" ] && [[ "$hook" != *.old ]] &&
-        ! grep -Fxq "call_lefthook run \"$hook\" \"\$@\"" "$hook_path"; then
-        echo "ERROR: migrate the existing custom hook at $hook_path before installing Lefthook." >&2
-        exit 1
-    elif [[ "$hook" != *.old ]] && [ ! -e "$hook_path" ]; then
-        hooks_to_install+=("$hook")
+    elif [[ "$hook" != *.old ]]; then
+        if [ ! -e "$hook_path" ]; then
+            hooks_to_install+=("$hook")
+        elif ! grep -Fxq "call_lefthook run \"$hook\" \"\$@\"" "$hook_path"; then
+            echo "ERROR: migrate the existing custom hook at $hook_path before installing Lefthook." >&2
+            exit 1
+        elif [ ! -x "$hook_path" ]; then
+            echo "ERROR: installed hook is not executable at $hook_path. Restore its execute permission before running setup." >&2
+            exit 1
+        fi
     fi
 done
 

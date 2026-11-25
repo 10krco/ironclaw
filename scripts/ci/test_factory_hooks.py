@@ -147,6 +147,12 @@ class FactoryHooksTest(unittest.TestCase):
         self.assertFalse((hooks / "commit-msg").is_symlink())
         self.assertTrue((hooks / "pre-push").is_file())
 
+        installed.chmod(0o644)
+        result = self.hook_setup(linked)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("installed hook is not executable", result.stderr)
+        self.assertEqual(installed.read_text(), customized)
+
     def test_only_tiber_updates_skip_source_gates(self):
         if not shutil.which("lefthook"):
             self.skipTest("Lefthook is needed to exercise actual Git hook dispatch")
