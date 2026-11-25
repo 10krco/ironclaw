@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -43,12 +44,16 @@ class FactoryHooksTest(unittest.TestCase):
         path.write_text(content)
         path.chmod(0o755)
 
-    def hook_setup(self, cwd=None):
+    def hook_setup_command(self):
         setup = (ROOT / "scripts/dev-setup.sh").read_text()
-        stage = setup.split("# 6. Install git hooks\n", 1)[1].split("\necho \"\"\n# Codebase", 1)[0]
+        start = setup.index("# 6. Install git hooks\n")
+        end = setup.index("\necho \"\"\n# Codebase", start)
+        return ["bash", "--noprofile", "--norc", "-euc", setup[start:end]]
+
+    def hook_setup(self, cwd=None, **extra_env):
         return subprocess.run(
-            ["bash", "--noprofile", "--norc", "-euc", stage],
-            cwd=cwd or self.repo, env=self.env, capture_output=True, text=True, timeout=20,
+            self.hook_setup_command(), cwd=cwd or self.repo, env={**self.env, **extra_env},
+            capture_output=True, text=True, timeout=20,
         )
 
     def test_migration_restores_previous_hooks_after_partial_install(self):
@@ -189,6 +194,49 @@ class FactoryHooksTest(unittest.TestCase):
         for hook, path in LEGACY_HOOKS.items():
             self.assertEqual((self.hooks / hook).readlink(), self.repo / path)
         self.assertEqual(list(self.hooks.glob(".lefthook-migration.*")), [])
+        self.assertFalse((self.hooks / ".ironclaw-lefthook-install.lock").exists())
+
+    def test_concurrent_setup_cannot_change_shared_hooks_during_migration(self):
+        self.git("commit", "--allow-empty", "-m", "test worktree baseline")
+        linked = self.workspace / "linked"
+        self.git("worktree", "add", "-b", "linked", str(linked))
+        for checkout in (self.repo, linked):
+            shutil.copy2(ROOT / "lefthook.yml", checkout / "lefthook.yml")
+        for hook, path in LEGACY_HOOKS.items():
+            target = self.repo / path
+            self.script(target, "#!/bin/sh\nexit 0\n")
+            (self.hooks / hook).symlink_to(target)
+        self.script(
+            self.workspace / "lefthook",
+            '#!/bin/sh\nset -eu\n'
+            '[ "${SECOND_SETUP:-}" != 1 ] || exit 53\n'
+            'touch "$SETUP_STARTED"\n'
+            'while [ ! -f "$SETUP_RELEASE" ]; do sleep 0.02; done\n'
+            'shift\n'
+            'for hook do printf "installed %s\\n" "$hook" > ".git/hooks/$hook"; done\n',
+        )
+        started = self.workspace / "started"
+        release = self.workspace / "release"
+        env = dict(self.env, SETUP_STARTED=str(started), SETUP_RELEASE=str(release))
+        with subprocess.Popen(
+            self.hook_setup_command(), cwd=self.repo, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        ) as first:
+            try:
+                deadline = time.monotonic() + 5
+                while not started.exists() and first.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(started.exists(), "first setup never reached the installer")
+                second = self.hook_setup(linked, SECOND_SETUP="1")
+                self.assertEqual(second.returncode, 1, second.stderr)
+                self.assertIn("hook migration is already in progress", second.stderr)
+            finally:
+                release.touch()
+                _, stderr = first.communicate(timeout=20)
+        self.assertEqual(first.returncode, 0, stderr)
+        for hook in LEGACY_HOOKS:
+            self.assertEqual((self.hooks / hook).read_text(), f"installed {hook}\n")
+        self.assertFalse((self.hooks / ".ironclaw-lefthook-install.lock").exists())
 
     def test_only_tiber_updates_skip_source_gates(self):
         if not shutil.which("lefthook"):

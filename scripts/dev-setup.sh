@@ -52,124 +52,139 @@ cargo test
 
 # 6. Install git hooks
 echo "[6/6] Installing git hooks..."
-HOOKS_DIR="$(git rev-parse --git-path hooks)"
-
-if git config --get core.hooksPath >/dev/null; then
-    echo "ERROR: resolve the configured core.hooksPath before installing Lefthook." >&2
-    exit 1
-fi
-
-# Git shares hooks between worktrees. The old setup could have run in any of them.
-allowed_worktrees=()
-worktree=''
-while IFS= read -r -d '' entry; do
-    case "$entry" in
-        'worktree '*) worktree="${entry#worktree }" ;;
-        bare) worktree='' ;;
-        '')
-            if [[ -n "$worktree" ]]; then
-                allowed_worktrees+=("$worktree")
-                worktree=''
-            fi
-            ;;
-    esac
-done < <(git worktree list --porcelain -z)
-
-# Lefthook follows hook symlinks. Remove only links created by the old setup.
-legacy_hooks=()
-hooks_to_install=()
-hook_paths=(commit-msg pre-commit pre-push commit-msg.old pre-commit.old pre-push.old)
-for hook in "${hook_paths[@]}"; do
-    hook_path="$HOOKS_DIR/$hook"
-    if [ -L "$hook_path" ]; then
-        target="$(readlink "$hook_path")"
-        for worktree in ${allowed_worktrees[@]+"${allowed_worktrees[@]}"}; do
-            case "$hook:$target" in
-                "commit-msg:$worktree/scripts/commit-msg-regression.sh" | \
-                "pre-commit:$worktree/scripts/pre-commit-safety.sh" | \
-                "pre-push:$worktree/.githooks/pre-push")
-                    legacy_hooks+=("$hook")
-                    hooks_to_install+=("$hook")
-                    continue 2
-                    ;;
-            esac
-        done
-        echo "ERROR: resolve the existing hook symlink at $hook_path before installing Lefthook." >&2
-        exit 1
-    elif [ -e "$hook_path" ] && [ ! -f "$hook_path" ]; then
-        echo "ERROR: resolve the existing hook path at $hook_path before installing Lefthook." >&2
-        exit 1
-    elif [[ "$hook" != *.old ]]; then
-        if [ ! -e "$hook_path" ]; then
-            hooks_to_install+=("$hook")
-        elif ! grep -Fxq "call_lefthook run \"$hook\" \"\$@\"" "$hook_path"; then
-            echo "ERROR: migrate the existing custom hook at $hook_path before installing Lefthook." >&2
-            exit 1
-        elif [ ! -x "$hook_path" ]; then
-            echo "ERROR: installed hook is not executable at $hook_path. Restore its execute permission before running setup." >&2
-            exit 1
-        elif ! grep -Fxq '[ -f ./.lefthookrc ] && . ./.lefthookrc' "$hook_path" ||
-            ! grep -Fq 'ERROR: Operation is aborted due to lefthook settings.' "$hook_path"; then
-            echo "ERROR: existing Lefthook launcher is incompatible at $hook_path. Back it up, remove it, and rerun setup." >&2
-            exit 1
-        fi
-    fi
-done
-
-if [[ -n "${legacy_hooks[0]-}" ]]; then
-    for worktree in "${allowed_worktrees[@]}"; do
-        if [ ! -f "$worktree/lefthook.yml" ]; then
-            echo "ERROR: worktree has no lefthook.yml at $worktree. Update it or use a separate clone before migrating shared hooks." >&2
-            exit 1
-        fi
-    done
-fi
-
 (
-    # Preserve installed launchers, including any local edits to them.
-    [[ -n "${hooks_to_install[0]-}" ]] || exit 0
-    rollback_paths=()
-    for hook in "${hooks_to_install[@]}"; do
-        rollback_paths+=("$hook" "$hook.old")
-    done
+    HOOKS_DIR="$(git rev-parse --git-path hooks)"
+
+    if git config --get core.hooksPath >/dev/null; then
+        echo "ERROR: resolve the configured core.hooksPath before installing Lefthook." >&2
+        exit 1
+    fi
+
+    # Linked worktrees share this lock. Take it before inspecting any hook.
     mkdir -p -- "$HOOKS_DIR"
-    backup_dir="$(mktemp -d "$HOOKS_DIR/.lefthook-migration.XXXXXX")"
-    install_started=false
-    restore_hooks() {
-        local status=$? hook
-        for hook in "${rollback_paths[@]}"; do
-            if [ "$status" -ne 0 ] && $install_started; then
-                if ! rm -f -- "$HOOKS_DIR/$hook"; then
-                    echo "ERROR: recover $hook from $backup_dir." >&2
-                    continue
-                fi
-                if [ -e "$backup_dir/$hook" ] || [ -L "$backup_dir/$hook" ]; then
-                    if ! mv -- "$backup_dir/$hook" "$HOOKS_DIR/"; then
-                        echo "ERROR: recover $hook from $backup_dir." >&2
-                    fi
-                fi
-            else
-                rm -f -- "$backup_dir/$hook"
-            fi
-        done
-        rmdir -- "$backup_dir"
-    }
-    trap restore_hooks EXIT
+    hook_lock="$HOOKS_DIR/.ironclaw-lefthook-install.lock"
+    if ! mkdir -- "$hook_lock"; then
+        if [ -d "$hook_lock" ]; then
+            echo "ERROR: hook migration is already in progress at $hook_lock. If setup was interrupted, verify it has stopped before removing the lock." >&2
+        fi
+        exit 1
+    fi
+    trap 'rmdir -- "$hook_lock"' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    for hook in "${rollback_paths[@]}"; do
-        if [ -e "$HOOKS_DIR/$hook" ] || [ -L "$HOOKS_DIR/$hook" ]; then
-            cp -a -- "$HOOKS_DIR/$hook" "$backup_dir/"
+
+    # Git shares hooks between worktrees. The old setup could have run in any of them.
+    allowed_worktrees=()
+    worktree=''
+    while IFS= read -r -d '' entry; do
+        case "$entry" in
+            'worktree '*) worktree="${entry#worktree }" ;;
+            bare) worktree='' ;;
+            '')
+                if [[ -n "$worktree" ]]; then
+                    allowed_worktrees+=("$worktree")
+                    worktree=''
+                fi
+                ;;
+        esac
+    done < <(git worktree list --porcelain -z)
+
+    # Lefthook follows hook symlinks. Remove only links created by the old setup.
+    legacy_hooks=()
+    hooks_to_install=()
+    hook_paths=(commit-msg pre-commit pre-push commit-msg.old pre-commit.old pre-push.old)
+    for hook in "${hook_paths[@]}"; do
+        hook_path="$HOOKS_DIR/$hook"
+        if [ -L "$hook_path" ]; then
+            target="$(readlink "$hook_path")"
+            for worktree in ${allowed_worktrees[@]+"${allowed_worktrees[@]}"}; do
+                case "$hook:$target" in
+                    "commit-msg:$worktree/scripts/commit-msg-regression.sh" | \
+                    "pre-commit:$worktree/scripts/pre-commit-safety.sh" | \
+                    "pre-push:$worktree/.githooks/pre-push")
+                        legacy_hooks+=("$hook")
+                        hooks_to_install+=("$hook")
+                        continue 2
+                        ;;
+                esac
+            done
+            echo "ERROR: resolve the existing hook symlink at $hook_path before installing Lefthook." >&2
+            exit 1
+        elif [ -e "$hook_path" ] && [ ! -f "$hook_path" ]; then
+            echo "ERROR: resolve the existing hook path at $hook_path before installing Lefthook." >&2
+            exit 1
+        elif [[ "$hook" != *.old ]]; then
+            if [ ! -e "$hook_path" ]; then
+                hooks_to_install+=("$hook")
+            elif ! grep -Fxq "call_lefthook run \"$hook\" \"\$@\"" "$hook_path"; then
+                echo "ERROR: migrate the existing custom hook at $hook_path before installing Lefthook." >&2
+                exit 1
+            elif [ ! -x "$hook_path" ]; then
+                echo "ERROR: installed hook is not executable at $hook_path. Restore its execute permission before running setup." >&2
+                exit 1
+            elif ! grep -Fxq '[ -f ./.lefthookrc ] && . ./.lefthookrc' "$hook_path" ||
+                ! grep -Fq 'ERROR: Operation is aborted due to lefthook settings.' "$hook_path"; then
+                echo "ERROR: existing Lefthook launcher is incompatible at $hook_path. Back it up, remove it, and rerun setup." >&2
+                exit 1
+            fi
         fi
     done
-    install_started=true
-    # Bash 3.2 treats an empty array as unset under set -u.
-    for hook in ${legacy_hooks[@]+"${legacy_hooks[@]}"}; do
-        rm -- "$HOOKS_DIR/$hook"
-    done
-    # Keep local Lefthook additions outside this project's rollback transaction.
-    lefthook install "${hooks_to_install[@]}"
+
+    if [[ -n "${legacy_hooks[0]-}" ]]; then
+        for worktree in "${allowed_worktrees[@]}"; do
+            if [ ! -f "$worktree/lefthook.yml" ]; then
+                echo "ERROR: worktree has no lefthook.yml at $worktree. Update it or use a separate clone before migrating shared hooks." >&2
+                exit 1
+            fi
+        done
+    fi
+
+    (
+        # Preserve installed launchers, including any local edits to them.
+        [[ -n "${hooks_to_install[0]-}" ]] || exit 0
+        rollback_paths=()
+        for hook in "${hooks_to_install[@]}"; do
+            rollback_paths+=("$hook" "$hook.old")
+        done
+        backup_dir="$(mktemp -d "$HOOKS_DIR/.lefthook-migration.XXXXXX")"
+        install_started=false
+        restore_hooks() {
+            local status=$? hook
+            for hook in "${rollback_paths[@]}"; do
+                if [ "$status" -ne 0 ] && $install_started; then
+                    if ! rm -f -- "$HOOKS_DIR/$hook"; then
+                        echo "ERROR: recover $hook from $backup_dir." >&2
+                        continue
+                    fi
+                    if [ -e "$backup_dir/$hook" ] || [ -L "$backup_dir/$hook" ]; then
+                        if ! mv -- "$backup_dir/$hook" "$HOOKS_DIR/"; then
+                            echo "ERROR: recover $hook from $backup_dir." >&2
+                        fi
+                    fi
+                else
+                    rm -f -- "$backup_dir/$hook"
+                fi
+            done
+            rmdir -- "$backup_dir"
+        }
+        trap restore_hooks EXIT
+        trap 'exit 129' HUP
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        for hook in "${rollback_paths[@]}"; do
+            if [ -e "$HOOKS_DIR/$hook" ] || [ -L "$HOOKS_DIR/$hook" ]; then
+                cp -a -- "$HOOKS_DIR/$hook" "$backup_dir/"
+            fi
+        done
+        install_started=true
+        # Bash 3.2 treats an empty array as unset under set -u.
+        for hook in ${legacy_hooks[@]+"${legacy_hooks[@]}"}; do
+            rm -- "$HOOKS_DIR/$hook"
+        done
+        # Keep local Lefthook additions outside this project's rollback transaction.
+        lefthook install "${hooks_to_install[@]}"
+    )
 )
 
 echo ""
