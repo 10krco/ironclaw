@@ -131,7 +131,8 @@ class FactoryHooksTest(unittest.TestCase):
             '#!/bin/sh\nset -eu\nstaging="$(git config --get core.hooksPath)"\nshift 2\n'
             'for hook do printf "#!/bin/sh\\n" > "$staging/$hook"; chmod +x "$staging/$hook"; done\n',
         )
-        clean = self.hook_setup()
+        clean = self.hook_setup(GIT_CONFIG_COUNT="00")
+        self.assertNotIn("missing config key", clean.stderr)
         self.assertEqual(clean.returncode, 0, clean.stderr)
         for hook in LEGACY_HOOKS:
             self.assertTrue(os.access(self.hooks / hook, os.X_OK))

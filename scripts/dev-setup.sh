@@ -156,7 +156,8 @@ echo "[6/6] Installing git hooks..."
             echo "ERROR: GIT_CONFIG_COUNT must be a nonnegative integer." >&2
             exit 1
         fi
-        env GIT_CONFIG_COUNT="$((10#$config_count + 1))" \
+        config_count="$((10#$config_count))"
+        env GIT_CONFIG_COUNT="$((config_count + 1))" \
             "GIT_CONFIG_KEY_${config_count}=core.hooksPath" \
             "GIT_CONFIG_VALUE_${config_count}=$staging_dir" \
             lefthook install --force "${hooks_to_install[@]}"
