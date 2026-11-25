@@ -252,6 +252,10 @@ git -C "$meaningful" config diff.external false
 expect_pass "regression checker uses Git patch format despite external diff config" \
   run_check "$meaningful"
 git -C "$meaningful" config --unset diff.external
+printf 'tests/regression.rs diff=hide-assertion\n' > "$meaningful/.git/info/attributes"
+git -C "$meaningful" config diff.hide-assertion.textconv "sed '/assert_eq!/d'"
+expect_pass "regression checker reads assertions hidden by textconv" \
+  run_check "$meaningful"
 
 empty="$TMP_ROOT/empty"
 init_repo "$empty"

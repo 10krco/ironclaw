@@ -329,7 +329,8 @@ class FactoryHooksTest(unittest.TestCase):
 
         calls.unlink()
         self.git("remote", "rename", "origin", "review's")
-        self.git("push", "--dry-run", "review's", "HEAD:refs/heads/probe")
+        result = self.git("push", "--dry-run", "review's", "HEAD:refs/heads/probe")
+        self.assertIn("merge check: HEAD cleanly merges with review's/main", result.stdout)
         self.assertEqual(calls.read_text().splitlines(), ["check"] * 3)
 
         self.git("push", "--quiet", "review's", "HEAD:refs/heads/main", "HEAD:refs/heads/probe")
