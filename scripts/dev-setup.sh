@@ -137,6 +137,12 @@ echo "[6/6] Installing git hooks..."
                 echo "ERROR: worktree has no lefthook.yml at $worktree. Update it or use a separate clone before migrating shared hooks." >&2
                 exit 1
             fi
+            if ! cmp -s lefthook.yml "$worktree/lefthook.yml" ||
+                { { [ -e .lefthookrc ] || [ -e "$worktree/.lefthookrc" ]; } &&
+                    ! cmp -s .lefthookrc "$worktree/.lefthookrc"; }; then
+                echo "ERROR: incompatible hook configuration at $worktree. Update it or use a separate clone before migrating shared hooks." >&2
+                exit 1
+            fi
         done
     fi
 
@@ -152,7 +158,10 @@ echo "[6/6] Installing git hooks..."
         # Override the hook destination for this installer process only.
         # The staging directory shares a filesystem with the live hooks.
         config_count="${GIT_CONFIG_COUNT:-0}"
-        if [[ "$config_count" == *[!0-9]* ]]; then
+        if [[ "$config_count" =~ ^[[:space:]]*\+?([0-9]+)$ ||
+              "$config_count" =~ ^[[:space:]]*-(0+)$ ]]; then
+            config_count="${BASH_REMATCH[1]}"
+        else
             echo "ERROR: GIT_CONFIG_COUNT must be a nonnegative integer." >&2
             exit 1
         fi

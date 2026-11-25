@@ -119,7 +119,19 @@ class FactoryHooksTest(unittest.TestCase):
         self.assertIn("worktree has no lefthook.yml", result.stderr)
         self.assertEqual((self.hooks / "pre-push").readlink(), self.repo / LEGACY_HOOKS["pre-push"])
 
+        (linked / "lefthook.yml").write_text("pre-commit:\n  jobs:\n    - run: true\n")
+        result = self.hook_setup()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("incompatible hook configuration", result.stderr)
+        self.assertEqual((self.hooks / "pre-push").readlink(), self.repo / LEGACY_HOOKS["pre-push"])
+
         shutil.copy2(ROOT / "lefthook.yml", linked / "lefthook.yml")
+        shutil.copy2(ROOT / ".lefthookrc", self.repo / ".lefthookrc")
+        result = self.hook_setup()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("incompatible hook configuration", result.stderr)
+
+        shutil.copy2(ROOT / ".lefthookrc", linked / ".lefthookrc")
         result = self.hook_setup(linked)
         self.assertEqual(result.returncode, 53, result.stderr)
         for hook, path in LEGACY_HOOKS.items():
@@ -131,11 +143,14 @@ class FactoryHooksTest(unittest.TestCase):
             '#!/bin/sh\nset -eu\nstaging="$(git config --get core.hooksPath)"\nshift 2\n'
             'for hook do printf "#!/bin/sh\\n" > "$staging/$hook"; chmod +x "$staging/$hook"; done\n',
         )
-        clean = self.hook_setup(GIT_CONFIG_COUNT="00")
-        self.assertNotIn("missing config key", clean.stderr)
-        self.assertEqual(clean.returncode, 0, clean.stderr)
-        for hook in LEGACY_HOOKS:
-            self.assertTrue(os.access(self.hooks / hook, os.X_OK))
+        for count in (" +00", "-0", "00"):
+            with self.subTest(count=count):
+                clean = self.hook_setup(GIT_CONFIG_COUNT=count)
+                self.assertNotIn("missing config key", clean.stderr)
+                self.assertEqual(clean.returncode, 0, clean.stderr)
+                for hook in LEGACY_HOOKS:
+                    self.assertTrue(os.access(self.hooks / hook, os.X_OK))
+                    (self.hooks / hook).unlink()
 
     def test_migration_preserves_installed_launcher_in_bare_repo_worktree(self):
         if not shutil.which("lefthook"):

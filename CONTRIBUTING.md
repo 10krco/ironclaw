@@ -11,8 +11,8 @@ cd ironclaw
 Install [Lefthook](https://lefthook.dev/installation/) before running setup.
 The script installs the WASM target and Git hooks and runs initial checks.
 Git shares installed hooks across linked worktrees. Update each checkout to a
-revision with `lefthook.yml` before migrating the legacy hooks. Use a separate
-clone to keep working on older branches with their legacy hooks. Move custom
+revision with matching `lefthook.yml` and `.lefthookrc` before migrating the
+legacy hooks. Use a separate clone to keep working on older branches. Move custom
 hook commands into Lefthook's local configuration before running setup.
 If setup reports an incompatible Lefthook launcher, back it up and remove it
 before rerunning setup. Keep any local checks in Lefthook's local configuration.
