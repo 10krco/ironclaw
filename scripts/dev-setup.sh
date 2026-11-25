@@ -74,7 +74,7 @@ for hook in "${hook_paths[@]}"; do
     hook_path="$HOOKS_DIR/$hook"
     if [ -L "$hook_path" ]; then
         target="$(readlink "$hook_path")"
-        for worktree in "${allowed_worktrees[@]}"; do
+        for worktree in ${allowed_worktrees[@]+"${allowed_worktrees[@]}"}; do
             case "$hook:$target" in
                 "commit-msg:$worktree/scripts/commit-msg-regression.sh" | \
                 "pre-commit:$worktree/scripts/pre-commit-safety.sh" | \
@@ -124,7 +124,8 @@ done
         fi
     done
     install_started=true
-    for hook in "${legacy_hooks[@]}"; do
+    # Bash 3.2 treats an empty array as unset under set -u.
+    for hook in ${legacy_hooks[@]+"${legacy_hooks[@]}"}; do
         rm -- "$HOOKS_DIR/$hook"
     done
     lefthook install

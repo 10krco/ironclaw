@@ -19,7 +19,7 @@ agentic_systems = true
 [scopes.rust_source]
 category = "source"
 include = ["crates/**/*.rs", "tools/ironclaw_silk_decoder/**/*.rs"]
-exclude = ["crates/**/tests/**", "crates/**/test_support/**", "crates/**/test_support.rs", "crates/**/*_test.rs", "crates/**/*_tests.rs", "crates/**/benches/**", "tools/ironclaw_silk_decoder/tests/**", "**/target/**"]
+exclude = ["crates/**/tests/**", "crates/**/tests.rs", "crates/**/test_support/**", "crates/**/test_support.rs", "crates/**/*_test.rs", "crates/**/*_tests.rs", "crates/**/benches/**", "tools/ironclaw_silk_decoder/tests/**", "**/target/**"]
 
 [scopes.rust_contract_assets]
 category = "source"
@@ -33,7 +33,7 @@ exclude = ["**/*.test.*", "**/*.spec.*", "**/__tests__/**", "**/node_modules/**"
 
 [scopes.rust_tests]
 category = "tests"
-include = ["tests/**/*.rs", "tests/**/*.toml", "crates/**/tests/**", "crates/**/test_support/**", "crates/**/test_support.rs", "crates/**/*_test.rs", "crates/**/*_tests.rs", "crates/**/benches/**", "tools/ironclaw_silk_decoder/tests/**"]
+include = ["tests/**/*.rs", "tests/**/*.toml", "crates/**/tests/**", "crates/**/tests.rs", "crates/**/test_support/**", "crates/**/test_support.rs", "crates/**/*_test.rs", "crates/**/*_tests.rs", "crates/**/benches/**", "tools/ironclaw_silk_decoder/tests/**"]
 exclude = ["**/target/**", "**/node_modules/**"]
 
 [scopes.webui_tests]

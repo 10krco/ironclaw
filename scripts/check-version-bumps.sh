@@ -9,9 +9,17 @@ ERRORS=0
 ALLOW_SKIP_VERSION_CHECK="${ALLOW_SKIP_VERSION_CHECK:-true}"
 RAW_BASE_BRANCH="${GITHUB_BASE_REF:-main}"
 BASE_BRANCH="${RAW_BASE_BRANCH#refs/heads/}"
+STAGED_CHECK=false
+if [[ "${1:-}" == "--staged" ]]; then
+    STAGED_CHECK=true
+fi
 
 # Ensure the base branch ref is available for skip checks and diffs.
 if ! git rev-parse "origin/${BASE_BRANCH}" >/dev/null 2>&1; then
+    if $STAGED_CHECK; then
+        echo "ERROR: origin/${BASE_BRANCH} is missing. Run git fetch origin ${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH} to fetch it before running the staged version check." >&2
+        exit 1
+    fi
     echo "Fetching origin/${BASE_BRANCH}..."
     git fetch origin "$BASE_BRANCH" --depth=1
 fi
@@ -38,9 +46,7 @@ fi
 
 echo "Base branch: $BASE_BRANCH"
 
-STAGED_CHECK=false
-if [[ "${1:-}" == "--staged" ]]; then
-    STAGED_CHECK=true
+if $STAGED_CHECK; then
     CHANGED_FILES=$(git diff --cached --name-only "$MERGE_BASE")
 else
     CHANGED_FILES=$(git diff --name-only "$MERGE_BASE" HEAD)

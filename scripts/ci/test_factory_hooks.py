@@ -57,7 +57,7 @@ class FactoryHooksTest(unittest.TestCase):
 
         def run_setup(cwd=None):
             return subprocess.run(
-                ["bash", "--noprofile", "--norc", "-ec", stage],
+                ["bash", "--noprofile", "--norc", "-euc", stage],
                 cwd=cwd or self.repo, env=self.env, capture_output=True, text=True, timeout=20,
             )
 
@@ -97,6 +97,12 @@ class FactoryHooksTest(unittest.TestCase):
         self.assertEqual(result.returncode, 53, result.stderr)
         for hook, path in LEGACY_HOOKS.items():
             self.assertEqual((self.hooks / hook).readlink(), self.repo / path)
+
+            (self.hooks / hook).unlink()
+        self.script(self.workspace / "lefthook", "#!/bin/sh\nprintf 'clean install reached\\n'\n")
+        clean = run_setup()
+        self.assertEqual(clean.returncode, 0, clean.stderr)
+        self.assertIn("clean install reached", clean.stdout)
 
     def test_only_tiber_updates_skip_source_gates(self):
         if not shutil.which("lefthook"):
@@ -217,6 +223,12 @@ class FactoryHooksTest(unittest.TestCase):
         accepted = subprocess.run([hook], cwd=self.repo, env=env, capture_output=True, text=True, timeout=20)
         self.assertEqual(accepted.returncode, 0, accepted.stdout)
         self.assertIn("package version bumped", accepted.stdout)
+
+        self.git("update-ref", "-d", "refs/remotes/origin/main")
+        missing_base = subprocess.run([hook], cwd=self.repo, env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(missing_base.returncode, 1, missing_base.stdout)
+        self.assertIn("fetch it before running the staged version check", missing_base.stderr)
+        self.assertNotIn("Fetching origin/", missing_base.stdout)
 
 
 if __name__ == "__main__":
