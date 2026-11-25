@@ -400,6 +400,11 @@ PR_STATIC_CONTROL_PATHS = {
     "rust-toolchain.toml",
     ".cargo/config",
     ".cargo/config.toml",
+    # Factory setup and local hook configuration, with no Reborn test lane.
+    ".development-system.toml",
+    ".lefthookrc",
+    "lefthook.yml",
+    "scripts/dev-setup.sh",
     "tests/integration/coverage-exemptions.toml",
     "tests/integration/coverage-floor.toml",
     # Release-smoke Python coverage is executed by Code Style's dedicated
