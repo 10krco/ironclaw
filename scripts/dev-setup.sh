@@ -108,6 +108,10 @@ for hook in "${hook_paths[@]}"; do
         elif [ ! -x "$hook_path" ]; then
             echo "ERROR: installed hook is not executable at $hook_path. Restore its execute permission before running setup." >&2
             exit 1
+        elif ! grep -Fxq '[ -f ./.lefthookrc ] && . ./.lefthookrc' "$hook_path" ||
+            ! grep -Fq 'ERROR: Operation is aborted due to lefthook settings.' "$hook_path"; then
+            echo "ERROR: existing Lefthook launcher is incompatible at $hook_path. Back it up, remove it, and rerun setup." >&2
+            exit 1
         fi
     fi
 done

@@ -79,7 +79,12 @@ class FactoryHooksTest(unittest.TestCase):
         self.assertIn("# Existing custom policy", replacement.read_text())
         self.assertEqual((self.hooks / "pre-commit").readlink(), self.repo / LEGACY_HOOKS["pre-commit"])
 
-        self.script(replacement, '#!/bin/sh\ncall_lefthook run "pre-push" "$@"\n')
+        self.script(
+            replacement,
+            '#!/bin/sh\n[ -f ./.lefthookrc ] && . ./.lefthookrc\n'
+            'echo "ERROR: Operation is aborted due to lefthook settings."\n'
+            'call_lefthook run "pre-push" "$@"\n',
+        )
         self.script(
             self.workspace / "lefthook",
             "#!/bin/sh\n[ \"$*\" = 'install commit-msg pre-commit' ] || exit 54\n"
@@ -153,24 +158,40 @@ class FactoryHooksTest(unittest.TestCase):
         self.assertIn("installed hook is not executable", result.stderr)
         self.assertEqual(installed.read_text(), customized)
 
+        config = linked / "lefthook.yml"
+        original_config = config.read_text()
+        config.write_text("pre-commit:\n  commands:\n    probe:\n      run: 'true'\n")
+        installed.unlink()
+        subprocess.run(
+            ["lefthook", "install", "pre-commit"], cwd=linked, env=self.env,
+            check=True, capture_output=True, text=True, timeout=20,
+        )
+        stale_launcher = installed.read_bytes()
+        config.write_text(original_config)
+        result = self.hook_setup(linked)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("existing Lefthook launcher is incompatible", result.stderr)
+        self.assertEqual(installed.read_bytes(), stale_launcher)
+
     def test_only_tiber_updates_skip_source_gates(self):
         if not shutil.which("lefthook"):
             self.skipTest("Lefthook is needed to exercise actual Git hook dispatch")
         remote = self.workspace / "origin.git"
         self.git("init", "--quiet", "--bare", str(remote))
         self.git("remote", "add", "origin", str(remote))
+        (self.repo / ".githooks").mkdir()
+        hook_files = ("lefthook.yml", ".lefthookrc", ".githooks/pre-push")
+        for path in hook_files:
+            shutil.copy2(ROOT / path, self.repo / path)
         probe = self.repo / "probe.txt"
         probe.write_text("base\n")
-        self.git("add", "probe.txt")
+        self.git("add", "probe.txt", *hook_files)
         self.git("commit", "--quiet", "-m", "test base")
         self.git("push", "--quiet", "origin", "main")
         probe.write_text("changed\n")
         self.git("add", "probe.txt")
         self.git("commit", "--quiet", "-m", "test update")
 
-        (self.repo / ".githooks").mkdir()
-        for path in ("lefthook.yml", ".lefthookrc", ".githooks/pre-push"):
-            shutil.copy2(ROOT / path, self.repo / path)
         calls = self.workspace / "calls"
         self.env["PROBE_CHECKS"] = str(calls)
         for path in (
@@ -219,6 +240,24 @@ class FactoryHooksTest(unittest.TestCase):
         self.git("remote", "rename", "origin", "review's")
         self.git("push", "--dry-run", "review's", "HEAD:refs/heads/probe")
         self.assertEqual(calls.read_text().splitlines(), ["check"] * 3)
+
+        self.git("push", "--quiet", "review's", "HEAD:refs/heads/main", "HEAD:refs/heads/probe")
+        empty_commit = self.git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "test empty update")
+        self.git("update-ref", "HEAD", empty_commit.stdout.strip())
+        calls.unlink(missing_ok=True)
+        result = self.git("push", "--dry-run", "review's", tiber_ref)
+        self.assertIn("Tiber board push", result.stdout)
+        self.assertFalse(calls.exists())
+        for refs in (
+            ("HEAD:refs/heads/main",),
+            (":refs/heads/probe",),
+            (tiber_ref, ":refs/heads/probe"),
+        ):
+            with self.subTest(refs=refs):
+                calls.unlink(missing_ok=True)
+                self.git("push", "--dry-run", "review's", *refs)
+                self.assertTrue(calls.exists(), "push skipped all source checks")
+                self.assertEqual(calls.read_text().splitlines(), ["check"] * 3)
 
     def test_commit_message_path_in_linked_worktree(self):
         if not shutil.which("lefthook"):

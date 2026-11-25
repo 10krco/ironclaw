@@ -13,7 +13,10 @@ pre-commit:
 pre-push:
   jobs:
     - name: development-system-fast_push
-      run: './.githooks/pre-push "${IRONCLAW_HOOK_ARGUMENT:-origin}" --fast --git-hook'
+      # Give Lefthook a fixed file so it dispatches even when the push changes no files.
+      # The hook determines scope from Git's ref updates on stdin.
+      files: git ls-files -- lefthook.yml
+      run: ': {files}; ./.githooks/pre-push "${IRONCLAW_HOOK_ARGUMENT:-origin}" --fast --git-hook'
       use_stdin: true
 
 commit-msg:
