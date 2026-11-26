@@ -2,6 +2,17 @@ use std::io::Read;
 
 use ironclaw_extension_contracts::runtime::ExtensionAssetPath;
 
+const ZIP_LANGUAGE_ENCODING_FLAG: u16 = 1 << 11;
+
+fn zip_entry_name_compat(flags: u16, raw_name: &[u8], zip_name: &str) -> String {
+    if flags & ZIP_LANGUAGE_ENCODING_FLAG != 0 {
+        zip_name.to_owned()
+    } else {
+        oem_cp::code_table_type::TableType::Complete(&oem_cp::code_table::DECODING_TABLE_CP437)
+            .decode_string_lossy(raw_name)
+    }
+}
+
 /// Zip-bomb guards for uploaded extension bundles. The HTTP route caps only
 /// the compressed body, so these bounds the archive entries and decompressed
 /// bytes held during validation.
@@ -53,7 +64,13 @@ pub fn unzip_extension_bundle(
         if !entry.is_file() {
             continue;
         }
-        let name = entry.name().to_string();
+        let zip_name = entry.name().map_err(|error| {
+            ExtensionBundleError::invalid(format!(
+                "uploaded tool bundle has an invalid entry name: {error}"
+            ))
+        })?;
+        let name =
+            zip_entry_name_compat(entry.flags().as_u16(), entry.name_raw(), zip_name.as_ref());
         ExtensionAssetPath::new(name.clone()).map_err(|error| {
             ExtensionBundleError::invalid(format!(
                 "uploaded tool bundle contains an unsafe path: {name}: {error}"
@@ -142,6 +159,35 @@ mod tests {
                 "unexpected error for {name}: {error}"
             );
         }
+    }
+
+    /// Flag-clear ZIP names use CP437 in existing extension bundles. Keep
+    /// their manifest-visible spelling stable when ZIP crate decoding changes.
+    #[test]
+    fn unzip_extension_bundle_preserves_legacy_cp437_asset_name() {
+        let mut bundle = zip_bundle(&[("aa", b"x".as_slice())]);
+        let mut patched = 0;
+        let mut index = 0;
+        while index + 2 <= bundle.len() {
+            if &bundle[index..index + 2] == b"aa" {
+                bundle[index..index + 2].copy_from_slice(b"\xC3\xA9");
+                patched += 1;
+                index += 2;
+            } else {
+                index += 1;
+            }
+        }
+        assert_eq!(patched, 2, "both ZIP filename records must be patched");
+
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bundle))
+            .expect("open crafted legacy archive");
+        let entry = archive.by_index(0).expect("read crafted legacy entry");
+        assert_eq!(entry.flags().as_u16() & (1 << 11), 0);
+        assert_eq!(entry.name_raw(), b"\xC3\xA9");
+        assert_eq!(entry.name().expect("ZIP 9 decoding premise"), "é");
+
+        let files = unzip_extension_bundle(&bundle).expect("valid legacy asset remains importable");
+        assert_eq!(files[0].0, "├⌐");
     }
 
     /// A small compressed upload must not expand past the decompressed cap.
