@@ -2201,6 +2201,32 @@ class RebornPrTestPlanTests(unittest.TestCase):
                 self.assertEqual(plan["mode"], "none")
                 self.assertEqual(plan, docs)
 
+    def test_serena_guidance_paths_are_prose_and_select_nothing(self) -> None:
+        """`.serena/**` is coding-assistant guidance, like `.claude/**`.
+
+        It is committed repository assistance, but no Reborn crate or test
+        lane reads it. A guidance edit beside real crate code must still leave
+        that code's lane selected.
+        """
+        for path in (
+            ".serena/.gitignore",
+            ".serena/project.yml",
+            ".serena/memories/core.md",
+        ):
+            with self.subTest(path=path):
+                plan = self.plan("pull_request", [path])
+                self.assertEqual(plan["mode"], "none")
+                self.assertEqual(plan["crate_buckets"], [])
+                self.assertEqual(plan["root_partitions"], [])
+                self.assertEqual(plan["integration_lanes"], [])
+
+        paired = self.plan(
+            "pull_request",
+            [".serena/memories/core.md", "crates/alpha/src/lib.rs"],
+        )
+        self.assertEqual(paired["mode"], "selected")
+        self.assertNotEqual(paired["crate_buckets"], [])
+
     def test_generated_wiki_paths_are_prose_and_select_nothing(self) -> None:
         """`openwiki/**` is generated prose, like `docs/**`.
 

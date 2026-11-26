@@ -155,6 +155,9 @@ IGNORED_PREFIXES = (
     "docs/",
     "openwiki/",
     ".claude/",
+    # Serena project configuration and memory are coding-assistant guidance;
+    # no Reborn crate or test lane consumes this subtree.
+    ".serena/",
     # IronLoop reads this repository configuration and optional role guidance;
     # no Reborn crate or test lane consumes it.
     ".ironloop/",
