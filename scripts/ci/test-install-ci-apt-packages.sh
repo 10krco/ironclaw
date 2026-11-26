@@ -55,7 +55,7 @@ case "\$APT_STUB_MODE" in
     hang_update)
         if [ "\$subcommand" = update ]; then
             # Make the hanging command itself the process supervised by
-            # `timeout`; a shell waiting on a child can handle signals
+            # the timeout utility; a shell waiting on a child can handle signals
             # differently across runner environments.
             exec sleep $STUB_HANG_SECONDS
         fi
@@ -123,6 +123,12 @@ expect_output_contains() {
         fail "$label: output missing '$needle'" "$last_output"
     fi
 }
+
+# Ubuntu 26.04's timeout implementation returns 137 for INT with kill-after;
+# keep the TERM signal and existing escalation bound that the hang cases rely on.
+if ! grep -qF -- 'timeout --signal=TERM --kill-after=30s' "$INSTALLER"; then
+    fail "timeout configuration: expected TERM with the 30s kill-after bound"
+fi
 
 expect_faster_than() {
     local label="$1" limit="$2" elapsed="$3"
