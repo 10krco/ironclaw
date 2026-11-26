@@ -1,0 +1,7 @@
+# Rust backend ownership map
+
+The Rust production workspace lives under `crates/`. Start with `crates/AGENTS.md`, which routes to the family guide; then read the target crate README, local rules, and any module `CONTRACT.md`. The seven enforced dependency layers are encoded in crate metadata and architecture tests; family directories are ownership/routing units, not trust or compilation units.
+
+Stable boundaries: `ironclaw_host_api` owns neutral authority vocabulary; `ironclaw_filesystem` owns filesystem mounts/CAS; `ironclaw_event_*` separates durable events, projections, and streams; `ironclaw_llm` owns provider-neutral model contracts and providers; `ironclaw_assistant` owns product orchestration and `ProductSurface`; WebUI owns HTTP/transport; composition assembles dependencies but not policy. Authorization, approvals, resources, obligations, dispatch, and runtime lanes remain distinct.
+
+External ingress is untrusted until typed validation. Capability effects pass through authorization/approval and mediated host/runtime contracts. Durable state is authoritative over in-memory caches; LLM data is retained and filtered, not deleted. See `mem:conventions`, `mem:tech_stack`, and `mem:task_completion`.
