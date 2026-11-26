@@ -53,10 +53,17 @@ echo "apt-get \$subcommand" >>"\$APT_TEST_LOG"
 case "\$APT_STUB_MODE" in
     happy) exit 0 ;;
     hang_update)
-        [ "\$subcommand" = update ] && sleep $STUB_HANG_SECONDS
+        if [ "\$subcommand" = update ]; then
+            # Make the hanging command itself the process supervised by
+            # `timeout`; a shell waiting on a child can handle signals
+            # differently across runner environments.
+            exec sleep $STUB_HANG_SECONDS
+        fi
         exit 0 ;;
     hang_install)
-        [ "\$subcommand" = install ] && sleep $STUB_HANG_SECONDS
+        if [ "\$subcommand" = install ]; then
+            exec sleep $STUB_HANG_SECONDS
+        fi
         exit 0 ;;
     flaky_update)
         if [ "\$subcommand" = update ]; then
