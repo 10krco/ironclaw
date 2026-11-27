@@ -339,6 +339,16 @@ class RebornPrTestPlanTests(unittest.TestCase):
         self.assertEqual(merge_group["mode"], "full")
         self.assertEqual(merge_group["root_partitions"], [0, 1, 2, 3])
 
+    def test_retired_coverage_test_and_e2e_inventory_have_no_rust_lane(self) -> None:
+        plan = self.plan(
+            "pull_request",
+            [
+                "tests/reborn_coverage_lane_stack_headroom.rs",
+                "tests/e2e/reborn_coverage_tests.txt",
+            ],
+        )
+        self.assertEqual(plan["mode"], "none")
+
     def test_changed_package_includes_transitive_reverse_dependents(self) -> None:
         plan = self.plan("pull_request", ["crates/alpha/src/lib.rs"])
         self.assertEqual(plan["mode"], "selected")
