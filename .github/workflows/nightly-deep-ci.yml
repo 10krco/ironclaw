@@ -60,24 +60,9 @@ jobs:
   reborn-tests:
     name: Reborn Tests
     uses: ./.github/workflows/reborn-tests.yml
-    # Two call-contract requirements, both validated at trigger time; a
-    # violation turns the whole nightly run into a startup_failure with ZERO
-    # jobs — including nightly-alert, so nothing reports it. This workflow
-    # had no successful run from its creation (2026-05-06) through 2026-07-08
-    # (65 of 74 retained runs are startup_failures) because of stacked
-    # violations of exactly these rules:
-    # 1. The called workflow's coverage-report job declares job-level
-    #    `pull-requests: write` and `actions: read`; the caller must grant
-    #    both. The `actions: read` scope arrived with #7018's changed-line
-    #    coverage gate (it fetches the base commit's merged-lcov artifact) and
-    #    is the exact omission that turned every nightly run from 2026-08-03
-    #    onward into a zero-job startup_failure.
-    # 2. reborn-tests.yml references secrets.SCCACHE_*; the caller must pass
-    #    secrets (`secrets: inherit`).
+    # The reusable test workflow uses the repository SCCACHE secrets.
     permissions:
       contents: read
-      pull-requests: write
-      actions: read
     secrets: inherit
     with:
       ref: ${{ github.sha }}

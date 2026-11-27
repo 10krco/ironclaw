@@ -806,6 +806,8 @@ def git_diff(
     command = [
         "git",
         "diff",
+        "--no-ext-diff",
+        "--no-textconv",
         "--unified=0",
         # Rename detection, pinned rather than inherited. `diff.renames` is on
         # by default but is repo-configurable; with it off a rename reads as a
@@ -856,6 +858,8 @@ def git_preimage_diff(
     command = [
         "git",
         "diff",
+        "--no-ext-diff",
+        "--no-textconv",
         "--unified=0",
         "-M",
         "-C",

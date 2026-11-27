@@ -538,19 +538,18 @@ jobs:
           set -euo pipefail
           case "${LANE}" in
             browser)
-              scripts/ci/run-hermetic-deterministic-suite.sh command pytest \
-                tests/e2e/scenarios/test_reborn_webui_v2_smoke.py \
-                tests/e2e/scenarios/test_reborn_webui_v2_sso.py \
-                tests/e2e/scenarios/test_reborn_webui_v2_custom_mcp.py \
-                -v --timeout=120
-              mapfile -t responses_tests < <(
+              # Run the same scenarios that previously used an instrumented binary.
+              browser_inventory="$(
                 sed -e 's/#.*//' -e '/^[[:space:]]*$/d' \
-                  tests/e2e/reborn_responses_e2e_tests.txt
-              )
-              ((${#responses_tests[@]} > 0))
+                  tests/e2e/reborn_coverage_tests.txt \
+                  tests/e2e/reborn_responses_e2e_tests.txt | sort -u
+              )"
+              [[ -n "$browser_inventory" ]]
+              mapfile -t browser_tests <<< "$browser_inventory"
               scripts/ci/run-hermetic-deterministic-suite.sh command pytest \
-                "${responses_tests[@]}" -v --timeout=120
+                "${browser_tests[@]}" -v --timeout=120
               scripts/ci/run-hermetic-deterministic-suite.sh command pytest \
+                tests/e2e/scenarios/test_reborn_webui_v2_custom_mcp.py \
                 tests/e2e/scenarios/test_reborn_blackbox_smoke.py \
                 -v --timeout=120
               ;;

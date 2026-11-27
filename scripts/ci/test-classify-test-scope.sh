@@ -332,8 +332,6 @@ has_reborn_tests=true"
 assert_scope \
   "Reborn changed coverage, branch export, and critical mutation gates" \
   "scripts/ci/reborn_changed_coverage.py
-scripts/ci/check-reborn-branch-coverage-flags.py
-scripts/ci/test-check-reborn-branch-coverage-flags.sh
 scripts/ci/critical_mutation_gate.py
 scripts/ci/test-critical-mutation-gate.sh" \
   "docs_only=false

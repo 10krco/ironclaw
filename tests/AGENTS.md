@@ -410,8 +410,7 @@ status reads, product-triggered manual runs, and scheduled-run denial evidence),
 
 **Policy & format**: `e2e_trace_runtime_policy_org_ceiling_yolo.rs` (org policy
 ceiling × yolo narrowing), `e2e_trace_runtime_policy_serde.rs` (wire-stable policy
-enums), `trace_format.rs`, `trace_llm_tests.rs`,
-`reborn_coverage_lane_stack_headroom.rs` (CI job must declare stack headroom).
+enums), `trace_format.rs`, `trace_llm_tests.rs`.
 
 ---
 

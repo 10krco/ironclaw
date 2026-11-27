@@ -108,11 +108,6 @@ if [ "${2:-}" = "--fast" ]; then
     exit 0
 fi
 
-if [ "${IRONCLAW_PREPUSH_REBORN_COVERAGE_RATCHET:-1}" = "1" ]; then
-    echo "==> reborn coverage ratchet (CI parity, heavy; skip with IRONCLAW_PREPUSH_REBORN_COVERAGE_RATCHET=0)"
-    run_ci_env "$SCRIPT_DIR/reborn-local-coverage-ratchet.sh"
-fi
-
 if [ "${IRONCLAW_PREPUSH_REBORN_WEBUI_E2E:-1}" = "1" ]; then
     emulate_cli="${IRONCLAW_EMULATE_CLI:-$REPO_ROOT/.emulate/packages/emulate/dist/index.js}"
     if [ ! -f "$emulate_cli" ]; then

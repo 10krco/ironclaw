@@ -7,7 +7,7 @@ a check belongs to exactly one tier on purpose.
 |---|---|---|
 | PR feedback | `pull_request` | Fast, scoped signal for the author. May run slim matrices and path-scoped subsets. |
 | **Production gate** | `merge_group` (merge queue) | The authority on what reaches `main`. Runs affected deterministic checks for the combined candidate and widens to exhaustive deterministic checks for global, topology, or unclassified changes. |
-| Post-merge confirm | `push` to `main` | Runs exhaustive coverage, warms shared caches, and feeds Codecov/canaries. A main-only deterministic failure means the affected-area classifier missed an impact and must be widened. |
+| Post-merge confirm | `push` to `main` | Runs the exhaustive deterministic tests and warms shared caches. A main-only deterministic failure means the affected-area classifier missed an impact and must be widened. |
 | Deep / scheduled | `schedule` (nightly) | Exhaustive suites too slow for the queue: legacy v1 matrix, full browser E2E, stress scans. |
 
 ## Build caches
@@ -27,8 +27,7 @@ by the first job to finish, so only the push run's root partitions and QA
 replay, which build the same complete integration-test closure, save it;
 every other job restores. `reborn-direct` is the lanes that run
 cargo against the host Cargo home (the sandbox Docker tests, which save it,
-and the merge-queue mutation gate, which restores it). The instrumented
-coverage lanes on `main` keep their separate `-cov-llvm21` lineages.
+and the merge-queue mutation gate, which restores it).
 
 ## The invariant
 
@@ -69,7 +68,7 @@ three canonical buckets coalesce every changed and dependent package into at
 most three PR jobs instead of omitting consumer tests. Merge groups retain the
 planner's reverse-dependency closure without the PR fan-out caps. Shared root
 or integration support changes select their owning lanes. CI workflow, CI
-script, coverage-policy, toolchain, workspace topology, and other global inputs
+script, toolchain, workspace topology, and other global inputs
 widen the merge group to every crate bucket, root partition, group suite,
 integration lane, and recorded replay. Unclassified merge-group paths also
 widen to exhaustive deterministic checks; unclassified pull-request paths and
@@ -82,18 +81,14 @@ workspace edges, and unreadable base state receive their full dependency
 breadth; workspace manifests and lockfiles are exhaustive merge-group inputs.
 Changed workspace manifests still select their production dependency closure
 on the PR. The stress tool
-is owned by `ironclaw-stress.yml`, and changed-line coverage exemptions are
-schema-checked in Code Style instead of launching unrelated integration lanes.
+is owned by `ironclaw-stress.yml`.
 The queue therefore preserves evidence for every classified impact without
 launching unrelated lanes. Diff-based crate work is packed into at most three
 buckets without dropping packages. Pull requests additionally cap root and
 integration work at one lane. Merge groups run every selected root lane in
 parallel and batch selected integration lanes into one compile-and-run job;
-main retains exhaustive per-lane fan-out for instrumented coverage.
-Full-coverage crate buckets run one multi-package `cargo llvm-cov` invocation
-per bucket, preserving every package test and the bucket LCOV artifact while
-sharing dependency compilation across packages in the same job.
-Uninstrumented whole-package buckets run ordinary libtest targets with nextest;
+main retains exhaustive per-lane fan-out.
+Crate buckets run ordinary libtest targets with nextest;
 packages declaring `harness = false` or an unknown test-target kind retain
 Cargo's runner. The planner derives that split from Cargo metadata and each
 selected manifest after bucket coalescing, failing closed when classification
@@ -104,8 +99,7 @@ CLI trace-policy tests that share an on-disk global policy; the workflow checks
 representative tests against nextest's compiled inventory before execution.
 Zero-test package selections preserve Cargo's successful no-op.
 
-`Tests (Reborn)` owns Rust crate, root, architecture, runtime, and coverage
-contracts. Code Style owns WebUI lint, Vitest, and the production build on all
+`Tests (Reborn)` owns Rust crate, root, architecture, and runtime tests. Code Style owns WebUI lint, Vitest, and the production build on all
 code events. Pull-request Clippy covers production libraries and binaries for
 directly changed workspace packages with all features. Test-only and CI-only
 PRs do not compile an unchanged workspace solely for linting. Root
@@ -327,7 +321,7 @@ own run on a startup_failure and can never see a cron that didn't fire.
 
 `main-ci-slack-alerts.yml` watches completed `workflow_run` events for the
 current `push` to `main` and `merge_group` workflows: Code Style, Tests
-(Reborn), Reborn E2E, Platform & Compat, Replay Snapshot Gate, Code Coverage,
+(Reborn), Reborn E2E, Platform & Compat, Replay Snapshot Gate,
 nearai-bench dispatcher tests, and Release-plz. Any watched run that concludes
 `failure`, `timed_out`, `action_required`, or `startup_failure` posts a Slack
 message with the workflow, conclusion, failed job and step names, available
@@ -342,11 +336,6 @@ channel. This keeps post-merge CI alerts in their dedicated channels while
 making queue bounces visible alongside live-canary failures.
 When adding a new workflow that runs on `push` to `main`, add its workflow
 `name:` to the watched list in `main-ci-slack-alerts.yml`.
-
-Code Coverage uses same-ref concurrency with cancellation. When merges land
-faster than coverage completes, only the newest cumulative `main` commit keeps
-running; superseded post-merge coverage runs do not consume runners needed by
-pull requests.
 
 ## Reborn-only release policy
 
@@ -398,5 +387,5 @@ points, including their existing optional DIND dispatch. The manual
   `changes` jobs) are curated allowlists. Adding a new crate or test directory
   requires updating them, or the queue's scoped checks silently narrow. Keep
   `reborn-e2e.yml`'s `changes` regex in sync with its `paths:` filters.
-- **Code Coverage**, **IronClaw Stress**, live canaries, Docker/release
+- **IronClaw Stress**, live canaries, Docker/release
   pipelines are informational or post-merge; they are not merge-gating.

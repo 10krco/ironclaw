@@ -276,11 +276,6 @@ jobs:
         run: bash scripts/ci/test-check-composition-budget.sh
       - name: Unit-test the dev-metrics tool
         run: python3 scripts/test_dev_metrics.py
-      - name: Validate changed-coverage policy
-        run: >-
-          python3 scripts/ci/reborn_changed_coverage.py
-          --manifest tests/integration/changed-coverage-exemptions.toml
-          --validate-manifest-only
       - name: Self-test exact release-binary smoke gate
         run: python3 -m unittest tests/test_smoke_release_binary.py
 

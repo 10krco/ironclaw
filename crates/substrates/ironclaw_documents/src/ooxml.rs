@@ -77,44 +77,49 @@ fn central_directory_entry_name_compat(flags: u16, raw_name: &[u8], extra: &[u8]
     zip_entry_name_compat(flags, raw_name, &zip_name)
 }
 
-fn reject_duplicate_central_directory_names(data: &[u8]) -> Result<(), DocumentError> {
-    const EOCD: &[u8] = b"PK\x05\x06";
-    const CENTRAL_ENTRY: &[u8] = b"PK\x01\x02";
+fn reject_duplicate_central_directory_names(
+    data: &[u8],
+    central_directory_start: u64,
+    archive_entry_count: usize,
+    max_entries: usize,
+) -> Result<(), DocumentError> {
+    const CENTRAL_ENTRY: &[u8; 4] = b"PK\x01\x02";
 
-    let Some(eocd) = data
-        .windows(EOCD.len())
-        .enumerate()
-        .rev()
-        .find_map(|(position, window)| {
-            let comment_len_offset = position.checked_add(20)?;
-            let comment_end =
-                position
-                    .checked_add(22)?
-                    .checked_add(usize::from(u16::from_le_bytes([
-                        *data.get(comment_len_offset)?,
-                        *data.get(comment_len_offset.checked_add(1)?)?,
-                    ])))?;
-            (window == EOCD && comment_end == data.len()).then_some(position)
-        })
-    else {
-        return Ok(());
-    };
+    let mut cursor =
+        usize::try_from(central_directory_start).map_err(|_| DocumentError::MalformedPart {
+            part: "<archive>".to_string(),
+            detail: "ZIP central directory offset is not addressable".to_string(),
+        })?;
+    if cursor > data.len() {
+        return Err(DocumentError::MalformedPart {
+            part: "<archive>".to_string(),
+            detail: "ZIP central directory starts past the archive end".to_string(),
+        });
+    }
 
-    let entries = usize::from(u16::from_le_bytes([data[eocd + 10], data[eocd + 11]]));
-    let mut cursor = u32::from_le_bytes([
-        data[eocd + 16],
-        data[eocd + 17],
-        data[eocd + 18],
-        data[eocd + 19],
-    ]) as usize;
-    let mut names = HashSet::with_capacity(entries);
+    let mut names = HashSet::with_capacity(archive_entry_count.min(max_entries));
+    let mut raw_names = HashSet::with_capacity(archive_entry_count.min(max_entries));
+    let mut parsed_entries = 0_usize;
 
-    for _ in 0..entries {
+    while data.get(cursor..cursor.saturating_add(CENTRAL_ENTRY.len())) == Some(CENTRAL_ENTRY) {
         let Some(header_end) = cursor.checked_add(46).filter(|end| *end <= data.len()) else {
-            return Ok(());
+            return Err(DocumentError::MalformedPart {
+                part: "<archive>".to_string(),
+                detail: "truncated ZIP central directory header".to_string(),
+            });
         };
-        if data.get(cursor..cursor + CENTRAL_ENTRY.len()) != Some(CENTRAL_ENTRY) {
-            return Ok(());
+
+        parsed_entries =
+            parsed_entries
+                .checked_add(1)
+                .ok_or_else(|| DocumentError::MalformedPart {
+                    part: "<archive>".to_string(),
+                    detail: "ZIP central directory entry count overflow".to_string(),
+                })?;
+        if parsed_entries > max_entries {
+            return Err(DocumentError::PackageTooLarge {
+                detail: format!("more than {max_entries} central directory entries"),
+            });
         }
 
         let flags = u16::from_le_bytes([data[cursor + 8], data[cursor + 9]]);
@@ -122,23 +127,38 @@ fn reject_duplicate_central_directory_names(data: &[u8]) -> Result<(), DocumentE
         let extra_len = usize::from(u16::from_le_bytes([data[cursor + 30], data[cursor + 31]]));
         let comment_len = usize::from(u16::from_le_bytes([data[cursor + 32], data[cursor + 33]]));
         let Some(name_end) = header_end.checked_add(name_len) else {
-            return Ok(());
+            return Err(DocumentError::MalformedPart {
+                part: "<archive>".to_string(),
+                detail: "ZIP central directory name length overflow".to_string(),
+            });
         };
         let Some(extra_end) = name_end.checked_add(extra_len) else {
-            return Ok(());
+            return Err(DocumentError::MalformedPart {
+                part: "<archive>".to_string(),
+                detail: "ZIP central directory extra-field length overflow".to_string(),
+            });
         };
-        let Some(next) = extra_end.checked_add(comment_len) else {
-            return Ok(());
+        let Some(next) = extra_end
+            .checked_add(comment_len)
+            .filter(|end| *end <= data.len())
+        else {
+            return Err(DocumentError::MalformedPart {
+                part: "<archive>".to_string(),
+                detail: "truncated ZIP central directory entry".to_string(),
+            });
         };
         let (Some(raw_name), Some(extra)) = (
             data.get(header_end..name_end),
             data.get(name_end..extra_end),
         ) else {
-            return Ok(());
+            return Err(DocumentError::MalformedPart {
+                part: "<archive>".to_string(),
+                detail: "truncated ZIP central directory name or extra field".to_string(),
+            });
         };
 
         let name = central_directory_entry_name_compat(flags, raw_name, extra);
-        if !names.insert(name.clone()) {
+        if !raw_names.insert(raw_name) || !names.insert(name.clone()) {
             return Err(DocumentError::MalformedPart {
                 part: name,
                 detail: "duplicate zip entry name".to_string(),
@@ -146,6 +166,19 @@ fn reject_duplicate_central_directory_names(data: &[u8]) -> Result<(), DocumentE
         }
         cursor = next;
     }
+
+    if parsed_entries != archive_entry_count {
+        let detail = if parsed_entries > archive_entry_count {
+            "ZIP central directory entries collide after filename normalization"
+        } else {
+            "ZIP central directory entry count does not match the archive index"
+        };
+        return Err(DocumentError::MalformedPart {
+            part: "<archive>".to_string(),
+            detail: detail.to_string(),
+        });
+    }
+
     Ok(())
 }
 
@@ -171,7 +204,6 @@ impl OoxmlPackage {
         max_total_bytes: u64,
         max_entries: usize,
     ) -> Result<Self, DocumentError> {
-        reject_duplicate_central_directory_names(data)?;
         let mut archive = zip::ZipArchive::new(Cursor::new(data)).map_err(|source| {
             DocumentError::OoxmlArchive {
                 operation: "open archive",
@@ -183,6 +215,12 @@ impl OoxmlPackage {
                 detail: format!("{} entries exceeds the {max_entries} limit", archive.len()),
             });
         }
+        reject_duplicate_central_directory_names(
+            data,
+            archive.central_directory_start(),
+            archive.len(),
+            max_entries,
+        )?;
 
         let mut names = Vec::with_capacity(archive.len());
         let mut entries = BTreeMap::new();
@@ -437,6 +475,61 @@ mod tests {
         replaced
     }
 
+    fn set_utf8_flag_on_second_entry(archive: &mut [u8]) {
+        for (signature, flags_offset) in [(&b"PK\x03\x04"[..], 6), (&b"PK\x01\x02"[..], 8)] {
+            let headers: Vec<_> = archive
+                .windows(signature.len())
+                .enumerate()
+                .filter_map(|(offset, bytes)| (bytes == signature).then_some(offset))
+                .collect();
+            let flags_start = headers[1] + flags_offset;
+            let flags = u16::from_le_bytes([archive[flags_start], archive[flags_start + 1]]);
+            archive[flags_start..flags_start + 2]
+                .copy_from_slice(&(flags | ZIP_LANGUAGE_ENCODING_FLAG).to_le_bytes());
+        }
+    }
+
+    fn add_unicode_path_extra_to_first_central_entry(archive: &mut Vec<u8>, unicode_name: &[u8]) {
+        let central_headers: Vec<_> = archive
+            .windows(4)
+            .enumerate()
+            .filter_map(|(offset, bytes)| (bytes == b"PK\x01\x02").then_some(offset))
+            .collect();
+        assert_eq!(central_headers.len(), 2);
+
+        let first = central_headers[0];
+        let name_len = usize::from(u16::from_le_bytes([
+            archive[first + 28],
+            archive[first + 29],
+        ]));
+        let old_extra_len = usize::from(u16::from_le_bytes([
+            archive[first + 30],
+            archive[first + 31],
+        ]));
+        let name_start = first + 46;
+        let raw_name = &archive[name_start..name_start + name_len];
+        let mut field = Vec::with_capacity(11 + unicode_name.len());
+        field.extend_from_slice(&0x7075_u16.to_le_bytes());
+        field.extend_from_slice(&(5_u16 + unicode_name.len() as u16).to_le_bytes());
+        field.push(1);
+        field.extend_from_slice(&crc32fast::hash(raw_name).to_le_bytes());
+        field.extend_from_slice(unicode_name);
+
+        let insertion = name_start + name_len + old_extra_len;
+        let field_len = field.len();
+        archive.splice(insertion..insertion, field);
+        archive[first + 30..first + 32]
+            .copy_from_slice(&((old_extra_len + field_len) as u16).to_le_bytes());
+
+        let eocd = archive
+            .windows(4)
+            .rposition(|bytes| bytes == b"PK\x05\x06")
+            .expect("fixture EOCD");
+        let directory_size = u32::from_le_bytes(archive[eocd + 12..eocd + 16].try_into().unwrap());
+        archive[eocd + 12..eocd + 16]
+            .copy_from_slice(&(directory_size + field_len as u32).to_le_bytes());
+    }
+
     #[test]
     fn repeated_serialization_is_deterministic() {
         let original = zip_with(&[("a.xml", b"<a/>"), ("media/x.bin", &[0u8, 1, 2, 255])]);
@@ -466,6 +559,78 @@ mod tests {
             Err(error) => panic!("wrong duplicate-entry error: {error:?}"),
             Ok(package) => panic!("duplicate entry was accepted: {:?}", package.names),
         }
+    }
+
+    #[test]
+    fn duplicate_raw_archive_names_with_different_flags_fail_loudly() {
+        let mut archive = zip_with(&[("aa", b"first"), ("bb", b"second")]);
+        assert_eq!(replace_zip_entry_name(&mut archive, b"aa", b"\xc3\xa9"), 2);
+        assert_eq!(replace_zip_entry_name(&mut archive, b"bb", b"\xc3\xa9"), 2);
+        set_utf8_flag_on_second_entry(&mut archive);
+
+        match OoxmlPackage::read(&archive) {
+            Err(DocumentError::MalformedPart { part, detail })
+                if part == "é" && detail == "duplicate zip entry name" => {}
+            Err(error) => panic!("wrong duplicate-raw-name error: {error:?}"),
+            Ok(package) => panic!("duplicate raw names were accepted: {:?}", package.names),
+        }
+    }
+
+    #[test]
+    fn duplicate_raw_archive_names_in_self_extracting_archive_fail_loudly() {
+        let mut archive = zip_with(&[("aa", b"first"), ("bb", b"second")]);
+        assert_eq!(replace_zip_entry_name(&mut archive, b"aa", b"\xc3\xa9"), 2);
+        assert_eq!(replace_zip_entry_name(&mut archive, b"bb", b"\xc3\xa9"), 2);
+        set_utf8_flag_on_second_entry(&mut archive);
+        archive.splice(0..0, b"self-extracting-prefix".to_vec());
+
+        match OoxmlPackage::read(&archive) {
+            Err(DocumentError::MalformedPart { part, detail })
+                if part == "é" && detail == "duplicate zip entry name" => {}
+            Err(error) => panic!("wrong duplicate-name error in prefixed archive: {error:?}"),
+            Ok(package) => panic!(
+                "duplicate names in a prefixed archive were accepted: {:?}",
+                package.names
+            ),
+        }
+    }
+
+    #[test]
+    fn unicode_path_index_collision_fails_loudly() {
+        let mut archive = zip_with(&[("aa", b"first"), ("bb", b"second")]);
+        assert_eq!(replace_zip_entry_name(&mut archive, b"bb", b"\xc3\xa9"), 2);
+        add_unicode_path_extra_to_first_central_entry(&mut archive, "é".as_bytes());
+
+        match OoxmlPackage::read(&archive) {
+            Err(DocumentError::MalformedPart { part, detail })
+                if part == "<archive>"
+                    && detail
+                        == "ZIP central directory entries collide after filename normalization" => {
+            }
+            Err(error) => panic!("wrong normalized-index collision error: {error:?}"),
+            Ok(package) => panic!(
+                "entries with a normalized ZIP index collision were accepted: {:?}",
+                package.names
+            ),
+        }
+    }
+
+    #[test]
+    fn unique_central_directory_unicode_path_remains_readable() {
+        let mut archive = zip_with(&[("original.xml", b"first"), ("other.xml", b"second")]);
+        add_unicode_path_extra_to_first_central_entry(&mut archive, b"renamed.xml");
+
+        let package = OoxmlPackage::read(&archive)
+            .expect("a unique central-directory Unicode Path remains a valid entry name");
+
+        assert_eq!(
+            package.entries.get("renamed.xml").map(Vec::as_slice),
+            Some(b"first".as_slice())
+        );
+        assert_eq!(
+            package.entries.get("other.xml").map(Vec::as_slice),
+            Some(b"second".as_slice())
+        );
     }
 
     #[test]

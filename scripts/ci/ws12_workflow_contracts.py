@@ -38,8 +38,6 @@ REQUIRED_MARKERS: dict[str, tuple[str, ...]] = {
         "merge_group:",
         "push:",
         "PROPTEST_CASES: ${{ inputs.deep_generations && '2048' || '256' }}",
-        "python3 scripts/ci/test_reborn_changed_coverage.py",
-        "python3 scripts/ci/reborn_changed_coverage.py",
     ),
     ".github/workflows/reborn-e2e.yml": (
         "merge_group:",

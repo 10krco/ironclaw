@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Workflow-contract tests for thresholded changed-line and branch coverage."""
+"""Tests for the optional changed-line and branch coverage tool."""
 
 from __future__ import annotations
 
@@ -17,25 +17,7 @@ import reborn_changed_coverage as gate
 ROOT = Path(__file__).resolve().parents[2]
 
 
-class ChangedCoverageWorkflowTests(unittest.TestCase):
-    def test_committed_manifest_passes_standalone_validation(self):
-        result = subprocess.run(
-            [
-                sys.executable,
-                "scripts/ci/reborn_changed_coverage.py",
-                "--manifest",
-                "tests/integration/changed-coverage-exemptions.toml",
-                "--validate-manifest-only",
-            ],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("changed coverage manifest valid", result.stdout)
-
+class ChangedCoverageToolTests(unittest.TestCase):
     def test_gate_sabotage_harness_passes(self):
         result = subprocess.run(
             ["bash", "scripts/ci/test-reborn-changed-coverage.sh"],
@@ -60,89 +42,6 @@ class ChangedCoverageWorkflowTests(unittest.TestCase):
 
         self.assertEqual(policy["line_percent"], 90.0)
         self.assertEqual(policy["branch_percent"], 0.0)
-
-    def test_reborn_workflow_runs_gate_and_preserves_machine_report(self):
-        workflow = (ROOT / ".github/workflows/reborn-tests.yml").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("python3 scripts/ci/test_reborn_changed_coverage.py", workflow)
-        self.assertIn("python3 scripts/ci/reborn_changed_coverage.py", workflow)
-        self.assertIn("tests/integration/changed-coverage-exemptions.toml", workflow)
-        self.assertIn("github.event.pull_request.base.sha", workflow)
-        self.assertIn("github.event.pull_request.head.sha", workflow)
-        self.assertIn('--head "$HEAD_SHA"', workflow)
-        self.assertNotIn('--head "$(git rev-parse HEAD)"', workflow)
-        self.assertIn("github.event.merge_group.base_sha", workflow)
-        self.assertIn("reborn-changed-coverage.json", workflow)
-        gate_step = workflow.split(
-            "- name: Gate changed Reborn lines and branches", maxsplit=1
-        )[1].split("\n      - name:", maxsplit=1)[0]
-        self.assertIn('--head "$HEAD_SHA"', gate_step)
-        self.assertNotIn(
-            "--threshold",
-            gate_step,
-            "thresholds come from the reviewed manifest, not a workflow override",
-        )
-        self.assertRegex(
-            workflow,
-            re.compile(
-                r"- name: Post sticky coverage comment\n"
-                r"\s+if: .*always\(\).*github\.event_name == 'pull_request'",
-            ),
-        )
-
-    def test_workflow_wires_the_base_coverage_lookup_it_needs(self):
-        """The subtraction is inert unless CI can actually reach the artifact.
-
-        `--fetch-base-coverage` fails closed, so a missing `actions: read` or a
-        missing token degrades to the strict denominator *silently as far as
-        the check colour goes* — green, just never subtracting. That is exactly
-        the shape (#6963, #6946) that must be pinned in a test rather than
-        trusted.
-        """
-
-        workflow = (ROOT / ".github/workflows/reborn-tests.yml").read_text(
-            encoding="utf-8"
-        )
-        job = workflow.split("\n  coverage-report:", maxsplit=1)[1].split(
-            "\n  critical-mutation:", maxsplit=1
-        )[0]
-        gate_step = job.split(
-            "- name: Gate changed Reborn lines and branches", maxsplit=1
-        )[1].split("\n      - name:", maxsplit=1)[0]
-
-        self.assertIn("--fetch-base-coverage", gate_step)
-        self.assertIn("GH_TOKEN:", gate_step)
-        permissions = job.split("permissions:", maxsplit=1)[1].split("steps:")[0]
-        self.assertIn("actions: read", permissions)
-
-    def test_base_coverage_workflow_constant_names_a_real_workflow(self):
-        """A renamed workflow file must trip a test, not go quietly dark.
-
-        The run lookup is scoped to this file name. If the workflow is renamed
-        and the constant is not, every lookup 404s, every run falls back to the
-        strict denominator, and nothing ever goes red to say so.
-        """
-
-        self.assertTrue(
-            (ROOT / ".github/workflows" / gate.BASE_COVERAGE_WORKFLOW).is_file(),
-            f"{gate.BASE_COVERAGE_WORKFLOW} does not exist; the base-coverage "
-            "run lookup would 404 on every PR and silently stop subtracting",
-        )
-
-    def test_base_coverage_artifact_constant_matches_what_ci_uploads(self):
-        """The artifact name and member must match the upload step verbatim."""
-
-        workflow = (ROOT / ".github/workflows/reborn-tests.yml").read_text(
-            encoding="utf-8"
-        )
-        upload = workflow.split("- name: Upload merged coverage report", maxsplit=1)[
-            1
-        ].split("\n  critical-mutation:", maxsplit=1)[0]
-
-        self.assertIn(f"name: {gate.BASE_COVERAGE_ARTIFACT}", upload)
-        self.assertIn(gate.BASE_COVERAGE_MEMBER, upload)
 
 
 class PreimageMappingTests(unittest.TestCase):

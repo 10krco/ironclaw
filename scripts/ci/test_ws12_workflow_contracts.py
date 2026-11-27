@@ -1912,12 +1912,12 @@ class WebuiFrontendSiteSabotageTests(unittest.TestCase):
                 )
                 if following == WEBUI_NESTED_LOCKFILE_PATTERN:
                     pairs += 1
-        self.assertEqual(pairs, 12, "expected exactly 12 cache-dependency-path sites")
+        self.assertEqual(pairs, 10, "expected exactly 10 cache-dependency-path sites")
 
     def test_reintroducing_a_bare_cd_site_fails_loudly(self) -> None:
         """The exact pre-#7155 regression: a `cd` back to the flat literal."""
         sabotaged = self.sabotage(
-            ".github/workflows/coverage.yml",
+            ".github/workflows/reborn-tests.yml",
             'set -euo pipefail\n          webui_dir="$(bash scripts/ci/crate-dir.sh '
             'ironclaw_webui)"\n          cd "${webui_dir}/frontend"',
             f"cd {self.webui_dir}/frontend",
@@ -1927,7 +1927,7 @@ class WebuiFrontendSiteSabotageTests(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "coverage.yml" in error and "hardcodes" in error and "frontend'" in error
+                "reborn-tests.yml" in error and "hardcodes" in error and "frontend'" in error
                 for error in errors
             ),
             errors,
