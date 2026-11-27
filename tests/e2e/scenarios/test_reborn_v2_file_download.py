@@ -330,6 +330,8 @@ async def test_workspace_tree_keyboard_navigation_and_accessibility(
     await filter_input.fill("report")
     await expect(guide).to_be_hidden()
     await page.keyboard.press("Tab")
+    await expect(page.get_by_role("button", name="Clear search")).to_be_focused()
+    await page.keyboard.press("Tab")
     await expect(workspace).to_be_focused()
     assert await tree.locator('[role="treeitem"][tabindex="0"]').count() == 1
     await filter_input.focus()

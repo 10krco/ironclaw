@@ -422,7 +422,7 @@ jobs:
           ref: ${{ inputs.ref || (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || github.sha }}
           persist-credentials: false
 
-      # This lane runs a prebuilt binary and compiles nothing, but
+      # These lanes run a prebuilt product binary, but
       # run-hermetic-test-process.sh probes `rustc --print sysroot` to put the
       # toolchain's bin on the child PATH and exits 1 if it cannot resolve one.
       # Inside the repo that probe hits rust-toolchain.toml, so rustup installed
@@ -432,6 +432,13 @@ jobs:
       # lazy install; every other hermetic lane already does this.
       - name: Install Rust
         uses: ./.github/actions/setup-rust
+        with:
+          targets: ${{ matrix.kind == 'browser' && 'wasm32-wasip2' || '' }}
+
+      - name: Build WASM test tool bundles
+        if: matrix.kind == 'browser'
+        # Prepare fixtures before pytest enters the offline runner.
+        run: env -u RUSTFLAGS bash scripts/build-test-tools.sh ascii-renderer hacker-news market-data
 
       - name: Download default Reborn E2E binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

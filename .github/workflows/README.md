@@ -116,9 +116,9 @@ smoke harness self-test remains in Code Style's fast deterministic job on every
 code PR. Reborn E2E continues to build the real product binary and run all
 browser/provider lanes on pull requests.
 Critical mutation manifests, selection logic, and changed-function resolution
-run on each PR. Actual `cargo-mutants` execution is a merge-queue gate, avoiding
-a long and low-frequency compile workload on the author feedback path without
-allowing selected mutations to reach `main` untested.
+run on each PR. The fork runs `cargo-mutants` through Nightly Deep CI on its
+schedule or by manual dispatch. The inherited merge-group lane remains
+available where a repository has enabled a merge queue.
 The four provider-operation shards run as two concurrent pairs. Each shard
 keeps its own pytest process and hermetic runtime, while each pair shares one
 runner and one Emulate checkout/build cycle. This preserves shard isolation
@@ -132,37 +132,27 @@ feature configurations even when its package set is scoped.
 
 ## Required checks and where they're enforced
 
-Branch enforcement lives in the repository **ruleset "Main"** (Settings → Rules
-→ Rulesets), *not* classic branch protection — the classic API reports
-`required_status_checks: null`. Inspect the effective rules with:
+The fork enforces its CI checks with a repository ruleset for `main`. The
+organization ruleset governs approving reviews and squash merges. Inspect the
+effective rules with:
 
 ```bash
-gh api repos/nearai/ironclaw/rules/branches/main
+gh api repos/10krco/ironclaw/rules/branches/main
 ```
 
-The ruleset enables the merge queue and requires these check contexts (stable
-roll-up **job names**, never individual matrix jobs):
+The fork requires these four roll-up job names on direct pull requests:
 
 | Check context (job name) | Workflow | Status |
 |---|---|---|
 | `Code Style (fmt + clippy)` | `code_style.yml` | required |
 | `Tests (Reborn)` | `reborn-tests.yml` | required |
-| `Reborn E2E` | `reborn-e2e.yml` | candidate — require once queue cost is confirmed |
-| `Platform & Compat` | `platform-and-compat.yml` | candidate — require once queue cost is confirmed |
-
-The 2026-07-30 queue-cost audit found only one retained `merge_group` sample
-for each candidate: Reborn E2E took 594 seconds and failed; Platform & Compat
-took 364 seconds and passed. Pull-request history was healthier (Reborn E2E
-p50/p95 877/1124 seconds; Platform & Compat 415/492 seconds), but one real queue
-sample—especially a failing E2E sample—is not enough evidence to alter the
-repository ruleset. Both checks therefore remain candidates. Refresh the
-workflow-run sample before promotion; a workflow being present on
-`merge_group` is not itself proof that it is safe to require.
+| `Reborn E2E` | `reborn-e2e.yml` | required |
+| `Platform & Compat` | `platform-and-compat.yml` | required |
 
 Rules for a roll-up job that is (or may become) required:
 
-1. Trigger on `merge_group` and report on every run (`if: always()`), so the
-   queue never waits on a check that will never arrive.
+1. Trigger on `pull_request` and report on every run (`if: always()`). The
+   same roll-up can report on `merge_group` where a queue is enabled.
 2. Tolerate `skipped` only for jobs that are event- or scope-gated by design;
    anything that ran must have succeeded.
 3. Assert expected coverage where feasible — the Code Style roll-up fails if a
