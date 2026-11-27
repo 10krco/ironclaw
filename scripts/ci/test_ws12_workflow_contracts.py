@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import os
+import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -1147,6 +1150,32 @@ class WorkflowContractSabotageTests(unittest.TestCase):
 
     def test_checked_in_workflows_cover_every_lane(self) -> None:
         self.assertEqual(validate_workflow_texts(self.workflows), [])
+
+    def test_docker_risk_includes_member_manifest_only_changes(self) -> None:
+        changes = job_body(self.workflows[PLATFORM_WORKFLOW], "changes")
+        self.assertIsNotNone(changes)
+        diff_step = changes.split("      - id: diff\n", 1)[1]
+        script = textwrap.dedent(diff_step.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "output"
+            for path, expected in (
+                ("crates/app/ironclaw_cli/Cargo.toml", "true"),
+                ("tools/ironclaw_stress/Cargo.toml", "true"),
+                ("crates/app/ironclaw_cli/README.md", "false"),
+            ):
+                with self.subTest(path=path):
+                    output.write_text("")
+                    subprocess.run(
+                        ["bash", "-eo", "pipefail", "-c",
+                         'git() { printf "%s\\n" "$CHANGED_PATH"; }\n' + script],
+                        cwd=ROOT,
+                        env={**os.environ, "BASE_SHA": "base", "HEAD_SHA": "head",
+                             "CHANGED_PATH": path, "GITHUB_OUTPUT": str(output)},
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertIn(f"has_docker_risk={expected}", output.read_text().splitlines())
 
     def test_hooks_parity_timeout_cannot_return_to_the_failing_budget(self) -> None:
         workflow = self.workflows[PLATFORM_WORKFLOW]

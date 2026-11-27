@@ -134,7 +134,7 @@ jobs:
             echo "has_wasm_abi_risk=false" >> "$GITHUB_OUTPUT"
           fi
 
-          if has_match '^(Dockerfile|\.dockerignore$|Cargo\.(toml|lock)$|docker/reborn/(entrypoint|start-sshd)\.sh$|\.github/workflows/platform-and-compat\.yml$)'; then
+          if has_match '^(Dockerfile|\.dockerignore$|Cargo\.(toml|lock)$|(crates|tools)/.+/Cargo\.toml$|docker/reborn/(entrypoint|start-sshd)\.sh$|\.github/workflows/platform-and-compat\.yml$)'; then
             echo "has_docker_risk=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_docker_risk=false" >> "$GITHUB_OUTPUT"

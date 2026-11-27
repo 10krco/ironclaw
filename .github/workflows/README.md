@@ -5,7 +5,7 @@ a check belongs to exactly one tier on purpose.
 
 | Tier | Event | Job |
 |---|---|---|
-| **Fork production gate** | `pull_request` | Code Style (fmt + clippy), Tests (Reborn), Reborn E2E, and Platform & Compat. Runs checks selected for the PR, including the Linux image build when Docker inputs or the root Cargo manifest or lockfile change. |
+| **Fork production gate** | `pull_request` | Code Style (fmt + clippy), Tests (Reborn), Reborn E2E, and Platform & Compat. Runs checks selected for the PR, including the Linux image build when Docker inputs, a Cargo manifest under crates or tools, or the root manifest or lockfile change. |
 | Upstream queue compatibility | `merge_group` | Runs affected deterministic checks for the combined candidate when a repository uses a merge queue. |
 | Post-merge confirm | `push` to `main` | Runs the exhaustive deterministic tests and warms shared caches. A main-only deterministic failure means the affected-area classifier missed an impact and must be widened. |
 | Deep / scheduled | `schedule` (nightly) | Exhaustive suites too slow for the queue: legacy v1 matrix, full browser E2E, stress scans. |
