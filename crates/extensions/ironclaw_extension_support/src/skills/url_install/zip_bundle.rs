@@ -9,6 +9,11 @@ use super::{
     bundle::{SkillBundle, normalize_archive_path, strip_common_archive_root},
 };
 
+fn map_bundle_operation_error(error: impl std::fmt::Display) -> SkillManagementCapabilityError {
+    tracing::debug!(error = %error, "skill URL bundle extraction failed");
+    SkillManagementCapabilityError::new(RuntimeDispatchErrorKind::OperationFailed)
+}
+
 pub(super) async fn extract_skill_bundle_blocking(
     data: Vec<u8>,
     requested_subdir: Option<String>,
@@ -28,9 +33,7 @@ pub(super) fn extract_skill_bundle(
     requested_subdir: Option<&str>,
 ) -> Result<SkillBundle, SkillManagementCapabilityError> {
     let reader = std::io::Cursor::new(data);
-    let mut archive = zip::ZipArchive::new(reader).map_err(|_| {
-        SkillManagementCapabilityError::new(RuntimeDispatchErrorKind::OperationFailed)
-    })?;
+    let mut archive = zip::ZipArchive::new(reader).map_err(map_bundle_operation_error)?;
     if archive.len() > MAX_ZIP_FILE_ENTRIES {
         return Err(SkillManagementCapabilityError::new(
             RuntimeDispatchErrorKind::OutputTooLarge,
@@ -39,16 +42,17 @@ pub(super) fn extract_skill_bundle(
 
     let mut raw_paths = Vec::new();
     for index in 0..archive.len() {
-        let file = archive.by_index(index).map_err(|_| {
-            SkillManagementCapabilityError::new(RuntimeDispatchErrorKind::OperationFailed)
-        })?;
+        let file = archive
+            .by_index(index)
+            .map_err(map_bundle_operation_error)?;
         if !file.is_dir() {
             if raw_paths.len() >= MAX_ZIP_FILE_ENTRIES {
                 return Err(SkillManagementCapabilityError::new(
                     RuntimeDispatchErrorKind::OutputTooLarge,
                 ));
             }
-            raw_paths.push(normalize_archive_path(Path::new(file.name()))?);
+            let entry_name = file.name().map_err(map_bundle_operation_error)?;
+            raw_paths.push(normalize_archive_path(Path::new(entry_name.as_ref()))?);
         }
     }
     let strip_root = strip_common_archive_root(&raw_paths);
@@ -58,9 +62,9 @@ pub(super) fn extract_skill_bundle(
     let mut total_unzipped_bytes = 0u64;
 
     for index in 0..archive.len() {
-        let mut file = archive.by_index(index).map_err(|_| {
-            SkillManagementCapabilityError::new(RuntimeDispatchErrorKind::OperationFailed)
-        })?;
+        let mut file = archive
+            .by_index(index)
+            .map_err(map_bundle_operation_error)?;
         if file.is_dir() {
             continue;
         }
@@ -69,7 +73,10 @@ pub(super) fn extract_skill_bundle(
                 RuntimeDispatchErrorKind::OutputTooLarge,
             ));
         }
-        let entry_name = file.name().to_string();
+        let entry_name = file
+            .name()
+            .map_err(map_bundle_operation_error)?
+            .into_owned();
         let mut path = normalize_archive_path(Path::new(&entry_name))?;
         if let Some(root) = &strip_root
             && let Ok(stripped) = path.strip_prefix(root)
@@ -89,9 +96,7 @@ pub(super) fn extract_skill_bundle(
         (&mut file)
             .take(MAX_ZIP_ENTRY_BYTES + 1)
             .read_to_end(&mut contents)
-            .map_err(|_| {
-                SkillManagementCapabilityError::new(RuntimeDispatchErrorKind::OperationFailed)
-            })?;
+            .map_err(map_bundle_operation_error)?;
         if contents.len() as u64 > MAX_ZIP_ENTRY_BYTES {
             return Err(SkillManagementCapabilityError::new(
                 RuntimeDispatchErrorKind::OutputTooLarge,
@@ -152,9 +157,7 @@ pub(super) fn extract_skill_bundle(
                     RuntimeDispatchErrorKind::OutputTooLarge,
                 ));
             }
-            skill_md = Some(String::from_utf8(contents).map_err(|_| {
-                SkillManagementCapabilityError::new(RuntimeDispatchErrorKind::OperationFailed)
-            })?);
+            skill_md = Some(String::from_utf8(contents).map_err(map_bundle_operation_error)?);
             continue;
         }
         if extra_files.len() >= ironclaw_skills::MAX_INSTALL_BUNDLE_FILES {
@@ -203,6 +206,53 @@ mod tests {
             writer.write_all(&content).unwrap();
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    fn replace_zip_entry_name(archive: &mut [u8], old_name: &[u8], new_name: &[u8]) {
+        assert_eq!(old_name.len(), new_name.len());
+        for (signature, name_length_offset, name_offset) in [
+            (b"PK\x03\x04".as_slice(), 26, 30),
+            (b"PK\x01\x02".as_slice(), 28, 46),
+        ] {
+            let mut cursor = 0;
+            let mut replacements = 0;
+            while let Some(relative_offset) = archive[cursor..]
+                .windows(signature.len())
+                .position(|window| window == signature)
+            {
+                let header_offset = cursor + relative_offset;
+                let name_length = u16::from_le_bytes([
+                    archive[header_offset + name_length_offset],
+                    archive[header_offset + name_length_offset + 1],
+                ]) as usize;
+                let name_start = header_offset + name_offset;
+                let name_end = name_start + name_length;
+                if &archive[name_start..name_end] == old_name {
+                    archive[name_start..name_end].copy_from_slice(new_name);
+                    replacements += 1;
+                }
+                cursor = name_end;
+            }
+            assert_eq!(replacements, 1, "expected one matching ZIP header name");
+        }
+    }
+
+    #[test]
+    fn extract_rejects_non_ascii_unflagged_legacy_names() {
+        // ZIP 8 used CP437 for names without the Language Encoding Flag. The
+        // two raw bytes below are also valid UTF-8, so ZIP 9's UTF-8-first
+        // decoding changes the string. Bundle paths are ASCII-only, so both
+        // interpretations must remain rejected before they can be installed.
+        let mut data = skill_bundle_zip(&[("SKILL.md", b"# Legacy\n"), ("aa", b"asset")]);
+        replace_zip_entry_name(&mut data, b"aa", b"\xC3\xA9");
+
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&data)).unwrap();
+        let entry = archive.by_name("é").unwrap();
+        assert_eq!(entry.flags().as_u16() & (1 << 11), 0);
+        assert_eq!(entry.name_raw(), b"\xC3\xA9");
+
+        let error = extract_skill_bundle(&data, None).unwrap_err();
+        assert_eq!(error.kind(), RuntimeDispatchErrorKind::InputEncode);
     }
 
     #[test]

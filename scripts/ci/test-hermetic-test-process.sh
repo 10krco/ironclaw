@@ -450,7 +450,7 @@ for workflow_contract in \
   ".github/workflows/reborn-tests.yml:scripts/ci/run-hermetic-deterministic-suite.sh command" \
   ".github/workflows/reborn-tests.yml:scripts/ci/run-hermetic-deterministic-suite.sh prepare-command" \
   ".github/workflows/reborn-tests.yml:IRONCLAW_HERMETIC_SUITE_SKIP_PREPARE=1" \
-  ".github/workflows/reborn-tests.yml:Install WebUI frontend dependencies for coverage" \
+  ".github/workflows/reborn-tests.yml:Install WebUI frontend dependencies for tests" \
   ".github/workflows/reborn-tests.yml:Install WebUI frontend dependencies for QA replay" \
   ".github/workflows/reborn-tests.yml:ironclaw|ironclaw_composition|ironclaw_webui)" \
   ".github/workflows/reborn-e2e.yml:scripts/ci/run-hermetic-deterministic-suite.sh" \

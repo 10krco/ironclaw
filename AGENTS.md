@@ -24,8 +24,8 @@ The workspace-root `integration` feature is empty with zero consumers — a bare
 `.github/actions/setup-rust`'s `toolchain` input default (what CI installs).
 `scripts/ci/lib/rust_toolchain_contracts.py` enforces that they are equal — it
 does not make either one derive from the other, so a bump edits both in the
-same PR or the gate fails. 35 CI jobs across 11 workflow files need a toolchain
-and all 35 reach the composite today, with no allowlist — re-check with
+same PR or the gate fails. Rust CI jobs must reach the composite, with no
+allowlist. Re-check with
 `python3 scripts/ci/ws12_workflow_contracts.py`, whose
 `validate_rust_jobs_reach_the_composite` fails the build on a job that runs
 cargo, or a hermetic runner, without it. That count covers `.github/workflows`

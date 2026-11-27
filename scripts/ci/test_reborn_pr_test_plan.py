@@ -339,6 +339,16 @@ class RebornPrTestPlanTests(unittest.TestCase):
         self.assertEqual(merge_group["mode"], "full")
         self.assertEqual(merge_group["root_partitions"], [0, 1, 2, 3])
 
+    def test_retired_coverage_test_and_e2e_inventory_have_no_rust_lane(self) -> None:
+        plan = self.plan(
+            "pull_request",
+            [
+                "tests/reborn_coverage_lane_stack_headroom.rs",
+                "tests/e2e/reborn_coverage_tests.txt",
+            ],
+        )
+        self.assertEqual(plan["mode"], "none")
+
     def test_changed_package_includes_transitive_reverse_dependents(self) -> None:
         plan = self.plan("pull_request", ["crates/alpha/src/lib.rs"])
         self.assertEqual(plan["mode"], "selected")
@@ -2201,6 +2211,32 @@ class RebornPrTestPlanTests(unittest.TestCase):
                 self.assertEqual(plan["mode"], "none")
                 self.assertEqual(plan, docs)
 
+    def test_serena_guidance_paths_are_prose_and_select_nothing(self) -> None:
+        """`.serena/**` is coding-assistant guidance, like `.claude/**`.
+
+        It is committed repository assistance, but no Reborn crate or test
+        lane reads it. A guidance edit beside real crate code must still leave
+        that code's lane selected.
+        """
+        for path in (
+            ".serena/.gitignore",
+            ".serena/project.yml",
+            ".serena/memories/core.md",
+        ):
+            with self.subTest(path=path):
+                plan = self.plan("pull_request", [path])
+                self.assertEqual(plan["mode"], "none")
+                self.assertEqual(plan["crate_buckets"], [])
+                self.assertEqual(plan["root_partitions"], [])
+                self.assertEqual(plan["integration_lanes"], [])
+
+        paired = self.plan(
+            "pull_request",
+            [".serena/memories/core.md", "crates/alpha/src/lib.rs"],
+        )
+        self.assertEqual(paired["mode"], "selected")
+        self.assertNotEqual(paired["crate_buckets"], [])
+
     def test_generated_wiki_paths_are_prose_and_select_nothing(self) -> None:
         """`openwiki/**` is generated prose, like `docs/**`.
 
@@ -2521,17 +2557,14 @@ class RebornPrTestPlanTests(unittest.TestCase):
             'cargo test "${cargo_package_args[@]}"',
             workflow,
         )
-        self.assertIn(
-            'cargo llvm-cov --branch --skip-functions \\\n'
-            '                "${package_args[@]}" "${feature_args[@]}"',
-            workflow,
-        )
+        self.assertNotIn("cargo llvm-cov", workflow)
+        self.assertNotIn("  coverage-report:", workflow)
         crate_job = workflow.split("\n  crate-tests:\n", 1)[1].split(
             "\n  reborn-root-tests:\n", 1
         )[0]
         integration_job = workflow.split(
-            "  reborn-integration-coverage:", 1
-        )[1].split("  coverage-report:", 1)[0]
+            "  reborn-integration-tests:", 1
+        )[1].split("  critical-mutation:", 1)[0]
         self.assertIn("CARGO_PACKAGES:", crate_job)
         self.assertIn("cargo-nextest@0.9.143", crate_job)
         self.assertIn(
@@ -2568,6 +2601,7 @@ class RebornPrTestPlanTests(unittest.TestCase):
             "timeout-minutes: ${{ github.event_name == 'push' && 120 || 300 }}",
             integration_job,
         )
+        self.assertIn('REBORN_COV_COLLECT: "false"', integration_job)
         self.assertIn("cargo-nextest@0.9.143", integration_job)
         self.assertNotIn("setup-sccache-dist", integration_job)
         self.assertIn("github.event.merge_group.base_sha", workflow)
@@ -2724,7 +2758,7 @@ class RebornPrTestPlanTests(unittest.TestCase):
             encoding="utf-8"
         )
         block = workflow.split("      - name: Run crate tests\n", 1)[1].split(
-            "      - name: Upload bucket lcov artifact\n", 1
+            "\n  root-reborn-parity-tests:\n", 1
         )[0]
         script = block.split("        run: |\n", 1)[1]
         script = "\n".join(
@@ -2786,7 +2820,7 @@ class RebornPrTestPlanTests(unittest.TestCase):
         )
         self.assertIn(
             '"${incremental_env[@]}" cargo test \\\n'
-            '                    -p "${package}" "--${kind}" "${name}"',
+            '                  -p "${package}" "--${kind}" "${name}"',
             workflow,
         )
 
@@ -3029,23 +3063,6 @@ class RebornPrTestPlanTests(unittest.TestCase):
                             ["diff", "--name-only", *expected_range],
                         )
 
-    def test_windows_push_clippy_keeps_tests_and_examples_scope(self) -> None:
-        code_style = (ROOT / ".github/workflows/code_style.yml").read_text(
-            encoding="utf-8"
-        )
-        windows_scope = code_style.split("\n  clippy-windows:\n", 1)[1].split(
-            "\n  reborn-cli-smoke:\n", 1
-        )[0]
-        self.assertIn(
-            "if: needs.changes.outputs.has_code == 'true' && github.event_name == 'push'",
-            windows_scope,
-        )
-        self.assertIn(
-            "run: cargo clippy --all --tests --examples ${{ matrix.flags }} -- -D warnings",
-            windows_scope,
-        )
-        self.assertNotIn("--all-targets", windows_scope)
-
     def test_pr_workflows_do_not_repeat_reborn_rust_contracts(self) -> None:
         code_style = (ROOT / ".github/workflows/code_style.yml").read_text(
             encoding="utf-8"
@@ -3071,7 +3088,7 @@ class RebornPrTestPlanTests(unittest.TestCase):
             e2e,
         )
         self.assertIn("rust_reborn_optional=true", e2e)
-        self.assertIn("--validate-manifest-only", code_style)
+        self.assertNotIn("reborn_changed_coverage.py", code_style)
         self.assertIn("pnpm test", code_style)
         self.assertIn("pnpm build", code_style)
         self.assertNotIn("webui-v2-js-tests:", reborn_tests)
@@ -3118,8 +3135,7 @@ class RebornPrTestPlanTests(unittest.TestCase):
         self.assertNotIn("projection::tests::nested_dispatch_stream", rust_gate)
 
         for suite in (
-            "tests/e2e/scenarios/test_reborn_webui_v2_smoke.py",
-            "tests/e2e/scenarios/test_reborn_webui_v2_sso.py",
+            "tests/e2e/reborn_coverage_tests.txt",
             "tests/e2e/scenarios/test_reborn_qa_trace_full_path.py",
             "tests/e2e/scenarios/test_reborn_qa_trace_replay.py",
             "tests/e2e/scenarios/test_reborn_blackbox_smoke.py",
@@ -3127,6 +3143,10 @@ class RebornPrTestPlanTests(unittest.TestCase):
         ):
             with self.subTest(suite=suite):
                 self.assertIn(suite, workflow)
+
+        browser_inventory = (ROOT / "tests/e2e/reborn_coverage_tests.txt").read_text()
+        for scenario in ("test_reborn_webui_v2_smoke.py", "test_reborn_webui_v2_sso.py"):
+            self.assertIn(f"tests/e2e/scenarios/{scenario}", browser_inventory)
 
         for process in (
             "product_build_pid",
@@ -3162,12 +3182,6 @@ class RebornPrTestPlanTests(unittest.TestCase):
             'job_result_ok "webui-v2-test-lanes"',
             workflow,
         )
-
-    def test_main_coverage_cancels_superseded_commits(self) -> None:
-        workflow = (ROOT / ".github/workflows/coverage.yml").read_text()
-        self.assertIn("group: code-coverage-${{ github.ref }}", workflow)
-        self.assertIn("cancel-in-progress: true", workflow)
-
 
 if __name__ == "__main__":
     unittest.main()

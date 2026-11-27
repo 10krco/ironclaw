@@ -56,7 +56,7 @@ apt_get_bounded() {
   local timeout_spec="$1"
   shift
   sudo env DEBIAN_FRONTEND=noninteractive \
-    timeout --signal=INT --kill-after=30s "${timeout_spec}" \
+    timeout --signal=TERM --kill-after=30s "${timeout_spec}" \
     apt-get \
     -o Acquire::http::Timeout=15 \
     -o Acquire::https::Timeout=15 \

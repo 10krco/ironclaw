@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import os
+import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -51,7 +54,6 @@ from ws12_workflow_contracts import (  # noqa: E402
     validate_libsql_scripted_memory_job,
     validate_postgres_scripted_parity,
     validate_production_lint_targets,
-    validate_windows_webui_install_shell,
     validate_webui_frontend_sites,
     validate_workflow_texts,
 )
@@ -1149,6 +1151,32 @@ class WorkflowContractSabotageTests(unittest.TestCase):
     def test_checked_in_workflows_cover_every_lane(self) -> None:
         self.assertEqual(validate_workflow_texts(self.workflows), [])
 
+    def test_docker_risk_includes_member_manifest_only_changes(self) -> None:
+        changes = job_body(self.workflows[PLATFORM_WORKFLOW], "changes")
+        self.assertIsNotNone(changes)
+        diff_step = changes.split("      - id: diff\n", 1)[1]
+        script = textwrap.dedent(diff_step.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "output"
+            for path, expected in (
+                ("crates/app/ironclaw_cli/Cargo.toml", "true"),
+                ("tools/ironclaw_stress/Cargo.toml", "true"),
+                ("crates/app/ironclaw_cli/README.md", "false"),
+            ):
+                with self.subTest(path=path):
+                    output.write_text("")
+                    subprocess.run(
+                        ["bash", "-eo", "pipefail", "-c",
+                         'git() { printf "%s\\n" "$CHANGED_PATH"; }\n' + script],
+                        cwd=ROOT,
+                        env={**os.environ, "BASE_SHA": "base", "HEAD_SHA": "head",
+                             "CHANGED_PATH": path, "GITHUB_OUTPUT": str(output)},
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertIn(f"has_docker_risk={expected}", output.read_text().splitlines())
+
     def test_hooks_parity_timeout_cannot_return_to_the_failing_budget(self) -> None:
         workflow = self.workflows[PLATFORM_WORKFLOW]
         self.assertEqual(validate_workflow_texts(self.workflows), [])
@@ -1326,22 +1354,6 @@ class WorkflowContractSabotageTests(unittest.TestCase):
         self.assertEqual(
             validate_production_lint_targets(self.workflows[CODE_STYLE_WORKFLOW]), []
         )
-
-    def test_windows_webui_install_step_requires_bash(self) -> None:
-        workflow = self.workflows[CODE_STYLE_WORKFLOW]
-        windows_job = job_body(workflow, "clippy-windows")
-        self.assertIsNotNone(windows_job)
-        self.assertEqual(validate_windows_webui_install_shell(workflow), [])
-
-        sabotaged_job = (windows_job or "").replace("        shell: bash\n", "")
-        self.assertNotEqual(sabotaged_job, windows_job)
-        sabotaged = dict(self.workflows)
-        sabotaged[CODE_STYLE_WORKFLOW] = workflow.replace(
-            windows_job or "", sabotaged_job, 1
-        )
-
-        errors = validate_workflow_texts(sabotaged)
-        self.assertTrue(any("must run" in error for error in errors), errors)
 
     def test_target_filters_on_the_production_lint_fail_loudly(self) -> None:
         """Every explicit target selector, in bare and value-bearing form.
@@ -1912,12 +1924,12 @@ class WebuiFrontendSiteSabotageTests(unittest.TestCase):
                 )
                 if following == WEBUI_NESTED_LOCKFILE_PATTERN:
                     pairs += 1
-        self.assertEqual(pairs, 12, "expected exactly 12 cache-dependency-path sites")
+        self.assertEqual(pairs, 9, "expected exactly 9 cache-dependency-path sites")
 
     def test_reintroducing_a_bare_cd_site_fails_loudly(self) -> None:
         """The exact pre-#7155 regression: a `cd` back to the flat literal."""
         sabotaged = self.sabotage(
-            ".github/workflows/coverage.yml",
+            ".github/workflows/reborn-tests.yml",
             'set -euo pipefail\n          webui_dir="$(bash scripts/ci/crate-dir.sh '
             'ironclaw_webui)"\n          cd "${webui_dir}/frontend"',
             f"cd {self.webui_dir}/frontend",
@@ -1927,7 +1939,7 @@ class WebuiFrontendSiteSabotageTests(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "coverage.yml" in error and "hardcodes" in error and "frontend'" in error
+                "reborn-tests.yml" in error and "hardcodes" in error and "frontend'" in error
                 for error in errors
             ),
             errors,

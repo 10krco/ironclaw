@@ -155,6 +155,9 @@ IGNORED_PREFIXES = (
     "docs/",
     "openwiki/",
     ".claude/",
+    # Serena project configuration and memory are coding-assistant guidance;
+    # no Reborn crate or test lane consumes this subtree.
+    ".serena/",
     # IronLoop reads this repository configuration and optional role guidance;
     # no Reborn crate or test lane consumes it.
     ".ironloop/",
@@ -407,6 +410,8 @@ PR_STATIC_CONTROL_PATHS = {
     "scripts/dev-setup.sh",
     "tests/integration/coverage-exemptions.toml",
     "tests/integration/coverage-floor.toml",
+    # Accept the deletion of the retired standalone coverage build test.
+    "tests/reborn_coverage_lane_stack_headroom.rs",
     # Release-smoke Python coverage is executed by Code Style's dedicated
     # `Release smoke script tests` step. It drives the real
     # `scripts/ci/smoke-release-binary.py`; no Tests (Reborn) Rust lane owns
@@ -625,8 +630,8 @@ SHARED_REBORN_ACTION_PREFIXES = (
     ".github/actions/setup-sccache-dist/",
     ".github/actions/setup-rust/",
     # The deliberate mapping the arm below asks for. `install-cargo-component`
-    # is consumed by `coverage.yml` and `platform-and-compat.yml`; a change to
-    # it can move what those lanes build, and no narrow lane exercises it
+    # is consumed by `platform-and-compat.yml`; a change to
+    # it can move what that workflow builds, and no narrow lane exercises it
     # safely, so it takes the exhaustive plan like its two siblings. Until this
     # entry existed it hit the fail-closed arm, so a PR editing only that file
     # took the whole plan step down instead of scheduling anything.

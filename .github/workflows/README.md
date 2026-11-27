@@ -5,9 +5,9 @@ a check belongs to exactly one tier on purpose.
 
 | Tier | Event | Job |
 |---|---|---|
-| PR feedback | `pull_request` | Fast, scoped signal for the author. May run slim matrices and path-scoped subsets. |
-| **Production gate** | `merge_group` (merge queue) | The authority on what reaches `main`. Runs affected deterministic checks for the combined candidate and widens to exhaustive deterministic checks for global, topology, or unclassified changes. |
-| Post-merge confirm | `push` to `main` | Runs exhaustive coverage, warms shared caches, and feeds Codecov/canaries. A main-only deterministic failure means the affected-area classifier missed an impact and must be widened. |
+| **Fork production gate** | `pull_request` | Code Style (fmt + clippy), Tests (Reborn), Reborn E2E, and Platform & Compat. Runs checks selected for the PR, including the Linux image build when Docker inputs, a Cargo manifest under crates or tools, or the root manifest or lockfile change. |
+| Upstream queue compatibility | `merge_group` | Runs affected deterministic checks for the combined candidate when a repository uses a merge queue. |
+| Post-merge confirm | `push` to `main` | Runs the exhaustive deterministic tests and warms shared caches. A main-only deterministic failure means the affected-area classifier missed an impact and must be widened. |
 | Deep / scheduled | `schedule` (nightly) | Exhaustive suites too slow for the queue: legacy v1 matrix, full browser E2E, stress scans. |
 
 ## Build caches
@@ -27,12 +27,12 @@ by the first job to finish, so only the push run's root partitions and QA
 replay, which build the same complete integration-test closure, save it;
 every other job restores. `reborn-direct` is the lanes that run
 cargo against the host Cargo home (the sandbox Docker tests, which save it,
-and the merge-queue mutation gate, which restores it). The instrumented
-coverage lanes on `main` keep their separate `-cov-llvm21` lineages.
+and the merge-queue mutation gate, which restores it).
 
 ## The invariant
 
-**No attributable deterministic failure may be main-only.** The merge queue
+**No attributable deterministic failure may be main-only.** Direct pull
+requests gate the fork. Where enabled, the merge queue
 classifies the combined `base_sha...head_sha` diff, runs the union of affected
 packages and lanes, and widens to the exhaustive push shape whenever a changed
 path is global, changes workspace topology, or cannot be classified. This
@@ -69,7 +69,7 @@ three canonical buckets coalesce every changed and dependent package into at
 most three PR jobs instead of omitting consumer tests. Merge groups retain the
 planner's reverse-dependency closure without the PR fan-out caps. Shared root
 or integration support changes select their owning lanes. CI workflow, CI
-script, coverage-policy, toolchain, workspace topology, and other global inputs
+script, toolchain, workspace topology, and other global inputs
 widen the merge group to every crate bucket, root partition, group suite,
 integration lane, and recorded replay. Unclassified merge-group paths also
 widen to exhaustive deterministic checks; unclassified pull-request paths and
@@ -82,18 +82,14 @@ workspace edges, and unreadable base state receive their full dependency
 breadth; workspace manifests and lockfiles are exhaustive merge-group inputs.
 Changed workspace manifests still select their production dependency closure
 on the PR. The stress tool
-is owned by `ironclaw-stress.yml`, and changed-line coverage exemptions are
-schema-checked in Code Style instead of launching unrelated integration lanes.
+is owned by `ironclaw-stress.yml`.
 The queue therefore preserves evidence for every classified impact without
 launching unrelated lanes. Diff-based crate work is packed into at most three
 buckets without dropping packages. Pull requests additionally cap root and
 integration work at one lane. Merge groups run every selected root lane in
 parallel and batch selected integration lanes into one compile-and-run job;
-main retains exhaustive per-lane fan-out for instrumented coverage.
-Full-coverage crate buckets run one multi-package `cargo llvm-cov` invocation
-per bucket, preserving every package test and the bucket LCOV artifact while
-sharing dependency compilation across packages in the same job.
-Uninstrumented whole-package buckets run ordinary libtest targets with nextest;
+main retains exhaustive per-lane fan-out.
+Crate buckets run ordinary libtest targets with nextest;
 packages declaring `harness = false` or an unknown test-target kind retain
 Cargo's runner. The planner derives that split from Cargo metadata and each
 selected manifest after bucket coalescing, failing closed when classification
@@ -104,8 +100,7 @@ CLI trace-policy tests that share an on-disk global policy; the workflow checks
 representative tests against nextest's compiled inventory before execution.
 Zero-test package selections preserve Cargo's successful no-op.
 
-`Tests (Reborn)` owns Rust crate, root, architecture, runtime, and coverage
-contracts. Code Style owns WebUI lint, Vitest, and the production build on all
+`Tests (Reborn)` owns Rust crate, root, architecture, and runtime tests. Code Style owns WebUI lint, Vitest, and the production build on all
 code events. Pull-request Clippy covers production libraries and binaries for
 directly changed workspace packages with all features. Test-only and CI-only
 PRs do not compile an unchanged workspace solely for linting. Root
@@ -121,9 +116,9 @@ smoke harness self-test remains in Code Style's fast deterministic job on every
 code PR. Reborn E2E continues to build the real product binary and run all
 browser/provider lanes on pull requests.
 Critical mutation manifests, selection logic, and changed-function resolution
-run on each PR. Actual `cargo-mutants` execution is a merge-queue gate, avoiding
-a long and low-frequency compile workload on the author feedback path without
-allowing selected mutations to reach `main` untested.
+run on each PR. The fork runs `cargo-mutants` through Nightly Deep CI on its
+schedule or by manual dispatch. The inherited merge-group lane remains
+available where a repository has enabled a merge queue.
 The four provider-operation shards run as two concurrent pairs. Each shard
 keeps its own pytest process and hermetic runtime, while each pair shares one
 runner and one Emulate checkout/build cycle. This preserves shard isolation
@@ -137,37 +132,27 @@ feature configurations even when its package set is scoped.
 
 ## Required checks and where they're enforced
 
-Branch enforcement lives in the repository **ruleset "Main"** (Settings → Rules
-→ Rulesets), *not* classic branch protection — the classic API reports
-`required_status_checks: null`. Inspect the effective rules with:
+The fork enforces its CI checks with a repository ruleset for `main`. The
+organization ruleset governs approving reviews and squash merges. Inspect the
+effective rules with:
 
 ```bash
-gh api repos/nearai/ironclaw/rules/branches/main
+gh api repos/10krco/ironclaw/rules/branches/main
 ```
 
-The ruleset enables the merge queue and requires these check contexts (stable
-roll-up **job names**, never individual matrix jobs):
+The fork requires these four roll-up job names on direct pull requests:
 
 | Check context (job name) | Workflow | Status |
 |---|---|---|
 | `Code Style (fmt + clippy)` | `code_style.yml` | required |
 | `Tests (Reborn)` | `reborn-tests.yml` | required |
-| `Reborn E2E` | `reborn-e2e.yml` | candidate — require once queue cost is confirmed |
-| `Platform & Compat` | `platform-and-compat.yml` | candidate — require once queue cost is confirmed |
-
-The 2026-07-30 queue-cost audit found only one retained `merge_group` sample
-for each candidate: Reborn E2E took 594 seconds and failed; Platform & Compat
-took 364 seconds and passed. Pull-request history was healthier (Reborn E2E
-p50/p95 877/1124 seconds; Platform & Compat 415/492 seconds), but one real queue
-sample—especially a failing E2E sample—is not enough evidence to alter the
-repository ruleset. Both checks therefore remain candidates. Refresh the
-workflow-run sample before promotion; a workflow being present on
-`merge_group` is not itself proof that it is safe to require.
+| `Reborn E2E` | `reborn-e2e.yml` | required |
+| `Platform & Compat` | `platform-and-compat.yml` | required |
 
 Rules for a roll-up job that is (or may become) required:
 
-1. Trigger on `merge_group` and report on every run (`if: always()`), so the
-   queue never waits on a check that will never arrive.
+1. Trigger on `pull_request` and report on every run (`if: always()`). The
+   same roll-up can report on `merge_group` where a queue is enabled.
 2. Tolerate `skipped` only for jobs that are event- or scope-gated by design;
    anything that ran must have succeeded.
 3. Assert expected coverage where feasible — the Code Style roll-up fails if a
@@ -293,7 +278,7 @@ the configuration:
 - **`github.event_name` in a reusable workflow is the caller's event** — it is
   never `workflow_call`. Conditions written as `github.event_name ==
   'workflow_call'` silently skip when invoked from nightly (this hid the
-  Windows/bench/docker deep coverage). Called workflows use the `deep` marker
+  bench and Docker checks). Called workflows use the `deep` marker
   input instead: it defaults to true and only materializes under
   `workflow_call`.
 - **A called workflow that references `secrets.*` needs those secrets passed at
@@ -327,7 +312,7 @@ own run on a startup_failure and can never see a cron that didn't fire.
 
 `main-ci-slack-alerts.yml` watches completed `workflow_run` events for the
 current `push` to `main` and `merge_group` workflows: Code Style, Tests
-(Reborn), Reborn E2E, Platform & Compat, Replay Snapshot Gate, Code Coverage,
+(Reborn), Reborn E2E, Platform & Compat, Replay Snapshot Gate,
 nearai-bench dispatcher tests, and Release-plz. Any watched run that concludes
 `failure`, `timed_out`, `action_required`, or `startup_failure` posts a Slack
 message with the workflow, conclusion, failed job and step names, available
@@ -336,17 +321,13 @@ resolve the PR number from GitHub's `gh-readonly-queue/main/pr-<number>-...`
 ref and include the PR title, author, and link.
 
 Main-branch alerts go to `secrets.MAIN_CI_SLACK_WEBHOOK_URLS`; the value may be
-a single webhook URL or multiple URLs separated by newlines or commas.
+a single webhook URL or multiple URLs separated by newlines or commas. With
+no webhook configured, the alert job records a notice and exits successfully.
 Merge-queue alerts go to `secrets.SLACK_WEBHOOK_URL`, the existing live-canary
 channel. This keeps post-merge CI alerts in their dedicated channels while
 making queue bounces visible alongside live-canary failures.
 When adding a new workflow that runs on `push` to `main`, add its workflow
 `name:` to the watched list in `main-ci-slack-alerts.yml`.
-
-Code Coverage uses same-ref concurrency with cancellation. When merges land
-faster than coverage completes, only the newest cumulative `main` commit keeps
-running; superseded post-merge coverage runs do not consume runners needed by
-pull requests.
 
 ## Reborn-only release policy
 
@@ -370,11 +351,8 @@ points, including their existing optional DIND dispatch. The manual
 
 ## Known accepted gaps (deliberate, revisit as needed)
 
-- **Windows clippy** (`code_style.yml` `clippy-windows`) runs on push only;
-  **Windows build** (`platform-and-compat.yml` `windows-build`) runs on push
-  and in the nightly deep reuse. Windows-only breakage is accepted as
-  post-merge; the Linux full feature matrix catches the dominant class
-  (feature-gated cfg errors).
+- **Routine fork CI** runs on Linux amd64. The manual release compile
+  preflight is available separately from the fork's PR baseline.
 - **Benchmark compilation** (`cargo bench --no-run`) runs on push and nightly
   only, and the clippy lanes do not pass `--benches`. Bench targets exist only
   in `crates/substrates/ironclaw_safety` today.
@@ -398,5 +376,5 @@ points, including their existing optional DIND dispatch. The manual
   `changes` jobs) are curated allowlists. Adding a new crate or test directory
   requires updating them, or the queue's scoped checks silently narrow. Keep
   `reborn-e2e.yml`'s `changes` regex in sync with its `paths:` filters.
-- **Code Coverage**, **IronClaw Stress**, live canaries, Docker/release
+- **IronClaw Stress**, live canaries, Docker/release
   pipelines are informational or post-merge; they are not merge-gating.

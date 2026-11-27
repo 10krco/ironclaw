@@ -38,8 +38,6 @@ REQUIRED_MARKERS: dict[str, tuple[str, ...]] = {
         "merge_group:",
         "push:",
         "PROPTEST_CASES: ${{ inputs.deep_generations && '2048' || '256' }}",
-        "python3 scripts/ci/test_reborn_changed_coverage.py",
-        "python3 scripts/ci/reborn_changed_coverage.py",
     ),
     ".github/workflows/reborn-e2e.yml": (
         "merge_group:",
@@ -1049,7 +1047,6 @@ def validate_postgres_scripted_parity(text: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 PRODUCTION_LINT_STEP = "Check production-target lints"
-WINDOWS_CLIPPY_JOB = "clippy-windows"
 WEBUI_INSTALL_STEP = "Install WebUI frontend dependencies"
 SCCACHE_SETUP_ACTION = ".github/actions/setup-sccache-dist/action.yml"
 SCCACHE_INSTALL_STEP = "Install sccache"
@@ -1144,28 +1141,6 @@ def validate_sccache_setup_action(text: str) -> list[str]:
         )
 
     return errors
-
-
-def validate_windows_webui_install_shell(text: str) -> list[str]:
-    """Keep POSIX WebUI setup commands out of PowerShell on Windows."""
-    windows_job = job_body(text, WINDOWS_CLIPPY_JOB)
-    if windows_job is None:
-        return [
-            f"{CODE_STYLE_WORKFLOW}: could not find the {WINDOWS_CLIPPY_JOB!r} job"
-        ]
-    install_step = step_body(windows_job, WEBUI_INSTALL_STEP)
-    if install_step is None:
-        return [
-            f"{CODE_STYLE_WORKFLOW}: {WINDOWS_CLIPPY_JOB!r} has no "
-            f"{WEBUI_INSTALL_STEP!r} step"
-        ]
-    if re.search(r"^[ \t]*shell:[ \t]*bash[ \t]*$", install_step, re.MULTILINE):
-        return []
-    return [
-        f"{CODE_STYLE_WORKFLOW}: {WINDOWS_CLIPPY_JOB!r} must run "
-        f"{WEBUI_INSTALL_STEP!r} with `shell: bash` because its commands use "
-        "POSIX shell syntax"
-    ]
 
 
 def validate_production_lint_targets(text: str) -> list[str]:
@@ -1842,7 +1817,6 @@ def validate_workflow_texts(
     if code_style is not None:
         errors.extend(validate_production_lint_targets(code_style))
         errors.extend(validate_code_style_docs_guard_order(code_style))
-        errors.extend(validate_windows_webui_install_shell(code_style))
     stress = workflows.get(STRESS_WORKFLOW)
     if stress is not None:
         errors.extend(validate_libsql_scripted_memory_job(stress))

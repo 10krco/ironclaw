@@ -316,8 +316,8 @@ async def test_admin_user_detail_refreshes_role_and_status_after_mutations(
 
     async def set_role(role_name) -> None:
         await page.get_by_role(
-            "button",
-            name=SEL_V2["admin_current_role_button_name"],
+            "combobox",
+            name=SEL_V2["admin_current_role_name"],
             exact=True,
         ).click()
         await page.get_by_role("option", name=role_name, exact=True).click()

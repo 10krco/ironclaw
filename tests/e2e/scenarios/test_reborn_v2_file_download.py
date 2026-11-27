@@ -293,7 +293,7 @@ async def test_workspace_tree_keyboard_navigation_and_accessibility(
     tree = page.get_by_role("tree", name="Pick a file")
     workspace = tree.get_by_role("treeitem", name="Home", exact=True)
     memory = tree.get_by_role("treeitem", name="Memory", exact=True)
-    filter_input = page.get_by_role("textbox", name="Filter by name…")
+    filter_input = page.get_by_role("searchbox", name="Filter by name…")
     await expect(tree).to_be_visible()
     await expect(filter_input).to_be_visible()
     await expect(page.get_by_role("navigation", name="workspace")).to_be_visible()
@@ -329,6 +329,8 @@ async def test_workspace_tree_keyboard_navigation_and_accessibility(
     await filter_input.focus()
     await filter_input.fill("report")
     await expect(guide).to_be_hidden()
+    await page.keyboard.press("Tab")
+    await expect(page.get_by_role("button", name="Clear search")).to_be_focused()
     await page.keyboard.press("Tab")
     await expect(workspace).to_be_focused()
     assert await tree.locator('[role="treeitem"][tabindex="0"]').count() == 1

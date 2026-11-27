@@ -25,6 +25,17 @@
 
 use std::io::Read;
 
+const ZIP_LANGUAGE_ENCODING_FLAG: u16 = 1 << 11;
+
+fn zip_entry_name_compat(flags: u16, raw_name: &[u8], zip_name: &str) -> String {
+    if flags & ZIP_LANGUAGE_ENCODING_FLAG != 0 {
+        zip_name.to_owned()
+    } else {
+        oem_cp::code_table_type::TableType::Complete(&oem_cp::code_table::DECODING_TABLE_CP437)
+            .decode_string_lossy(raw_name)
+    }
+}
+
 /// Maximum decompressed size for a single ZIP entry (50 MB).
 const MAX_DECOMPRESSED_ENTRY: u64 = 50 * 1024 * 1024;
 /// Maximum total decompressed size across all ZIP entries (100 MB).
@@ -94,6 +105,9 @@ impl ExtractionError {
 /// Typed errors for ZIP decompression safety checks.
 #[derive(Debug, thiserror::Error)]
 enum ZipEntryError {
+    #[error("zip entry name is invalid: {source}")]
+    InvalidEntryName { source: zip::result::ZipError },
+
     #[error("entry '{name}' decompressed size {size} exceeds per-entry limit {max}")]
     EntryTooLarge { name: String, size: u64, max: u64 },
 
@@ -257,7 +271,10 @@ fn bounded_read_zip_entry_with_limits<R: Read + ?Sized>(
     max_total: u64,
 ) -> Result<String, ZipEntryError> {
     let entry_size = file.size();
-    let entry_name = file.name().to_string();
+    let entry_name = file
+        .name()
+        .map(|name| name.into_owned())
+        .map_err(|source| ZipEntryError::InvalidEntryName { source })?;
 
     // Fast pre-check using declared header size (untrusted, but cheap reject)
     // against per-entry limit.
@@ -348,22 +365,25 @@ fn extract_pptx(data: &[u8]) -> Result<String, String> {
         zip::ZipArchive::new(cursor).map_err(|e| format!("invalid PPTX archive: {e}"))?;
 
     // Collect slide filenames (ppt/slides/slide1.xml, slide2.xml, ...)
-    let mut slide_names: Vec<String> = Vec::new();
+    let mut slides: Vec<(String, usize)> = Vec::new();
     for i in 0..archive.len() {
         if let Ok(file) = archive.by_index(i) {
-            let name = file.name().to_string();
+            let Ok(name) = file.name() else {
+                continue;
+            };
+            let name = zip_entry_name_compat(file.flags().as_u16(), file.name_raw(), &name);
             if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
-                slide_names.push(name);
+                slides.push((name, i));
             }
         }
     }
-    slide_names.sort();
+    slides.sort_by(|left, right| left.0.cmp(&right.0));
 
     let mut all_text = Vec::new();
     let mut total_decompressed: u64 = 0;
     let mut rejected: Option<String> = None;
-    for name in &slide_names {
-        let Ok(mut file) = archive.by_name(name) else {
+    for (name, index) in slides {
+        let Ok(mut file) = archive.by_index(index) else {
             rejected.get_or_insert_with(|| format!("could not open PPTX slide {name}"));
             continue;
         };
@@ -416,21 +436,24 @@ fn extract_xlsx(data: &[u8]) -> Result<String, String> {
     };
 
     // Read sheet data
-    let mut sheet_names: Vec<String> = Vec::new();
+    let mut sheets: Vec<(String, usize)> = Vec::new();
     for i in 0..archive.len() {
         if let Ok(file) = archive.by_index(i) {
-            let name = file.name().to_string();
+            let Ok(name) = file.name() else {
+                continue;
+            };
+            let name = zip_entry_name_compat(file.flags().as_u16(), file.name_raw(), &name);
             if name.starts_with("xl/worksheets/sheet") && name.ends_with(".xml") {
-                sheet_names.push(name);
+                sheets.push((name, i));
             }
         }
     }
-    sheet_names.sort();
+    sheets.sort_by(|left, right| left.0.cmp(&right.0));
 
     let mut all_text = Vec::new();
     let mut rejected: Option<String> = None;
-    for name in &sheet_names {
-        let Ok(mut file) = archive.by_name(name) else {
+    for (name, index) in sheets {
+        let Ok(mut file) = archive.by_index(index) else {
             rejected.get_or_insert_with(|| format!("could not open XLSX sheet {name}"));
             continue;
         };
@@ -814,6 +837,103 @@ pub fn truncate_to_chars(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn zip_with_patched_names(
+        entries: &[(&str, &str)],
+        replacements: &[(&[u8], &[u8])],
+    ) -> Vec<u8> {
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        for (name, contents) in entries {
+            writer.start_file(*name, options).unwrap();
+            std::io::Write::write_all(&mut writer, contents.as_bytes()).unwrap();
+        }
+
+        let mut bytes = writer.finish().unwrap().into_inner();
+        for (placeholder, replacement) in replacements {
+            assert_eq!(placeholder.len(), replacement.len());
+            let offsets: Vec<_> = bytes
+                .windows(placeholder.len())
+                .enumerate()
+                .filter_map(|(offset, window)| (window == *placeholder).then_some(offset))
+                .collect();
+            assert_eq!(offsets.len(), 2, "expected local and central ZIP names");
+            for offset in offsets {
+                bytes[offset..offset + placeholder.len()].copy_from_slice(replacement);
+            }
+        }
+        bytes
+    }
+
+    fn assert_alpha_precedes_legacy(extraction: DocumentExtraction) {
+        let DocumentExtraction::Text(text) = extraction else {
+            panic!("expected extracted text, got {extraction:?}");
+        };
+        let alpha = text.find("Alpha").expect("alpha text should be extracted");
+        let legacy = text
+            .find("Legacy")
+            .expect("legacy text should be extracted");
+        assert!(
+            alpha < legacy,
+            "slides/sheets should use CP437 name order: {text}"
+        );
+    }
+
+    #[test]
+    fn extract_pptx_orders_legacy_cp437_slide_names_consistently() {
+        let bytes = zip_with_patched_names(
+            &[
+                ("ppt/slides/slideqx.xml", "<a:t>Legacy</a:t>"),
+                ("ppt/slides/slidev.xml", "<a:t>Alpha</a:t>"),
+            ],
+            &[
+                (b"ppt/slides/slideqx.xml", b"ppt/slides/slide\xC3\xA9.xml"),
+                (b"ppt/slides/slidev.xml", b"ppt/slides/slide\xE0.xml"),
+            ],
+        );
+
+        assert_alpha_precedes_legacy(extract_document(
+            &bytes,
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            Some("legacy.pptx"),
+        ));
+    }
+
+    #[test]
+    fn extract_xlsx_orders_legacy_cp437_sheet_names_consistently() {
+        let bytes = zip_with_patched_names(
+            &[
+                (
+                    "xl/sharedStrings.xml",
+                    "<sst><si><t>Legacy</t></si><si><t>Alpha</t></si></sst>",
+                ),
+                (
+                    "xl/worksheets/sheetqx.xml",
+                    "<worksheet><sheetData><row><c t=\"s\"><v>0</v></c></row></sheetData></worksheet>",
+                ),
+                (
+                    "xl/worksheets/sheetv.xml",
+                    "<worksheet><sheetData><row><c t=\"s\"><v>1</v></c></row></sheetData></worksheet>",
+                ),
+            ],
+            &[
+                (
+                    b"xl/worksheets/sheetqx.xml",
+                    b"xl/worksheets/sheet\xC3\xA9.xml",
+                ),
+                (b"xl/worksheets/sheetv.xml", b"xl/worksheets/sheet\xE0.xml"),
+            ],
+        );
+
+        assert_alpha_precedes_legacy(extract_document(
+            &bytes,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            Some("legacy.xlsx"),
+        ));
+    }
 
     #[test]
     fn strip_xml_basic() {

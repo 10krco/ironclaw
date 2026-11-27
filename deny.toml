@@ -14,11 +14,25 @@ ignore = [
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0104",
+    # libsql 0.9.30 pins hyper-rustls 0.25/rustls 0.22.4. The affected 0.22
+    # line has no patched release; rustls fixes these advisories in 0.23.46.
+    # Keep these exact TLS advisories visible here until libsql moves to a
+    # transport stack on a patched rustls line.
+    "RUSTSEC-2026-0346",
+    "RUSTSEC-2026-0349",
+    # The same libsql transport pins rustls-webpki 0.102.8. RUSTSEC-2026-0382
+    # has no patched 0.102 release; the independent 0.103.16+ branch is fixed.
+    "RUSTSEC-2026-0382",
     # h2 unbounded empty DATA frames — h2 0.4 is patched in Cargo.lock, but
     # libsql 0.9.30 still pins tonic/hyper to h2 0.3.27. The advisory provides
     # no patched 0.3.x release, so keep the legacy line ignored until libsql's
     # transport stack can move to h2 >=0.4.16.
     "RUSTSEC-2026-0258",
+    # Chrono and chrono-tz report informational unmaintained advisories with
+    # no safe upgrade. They are pervasive in workspace contracts, so retain
+    # the current APIs until a deliberate migration can replace them.
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0555",
     # rsa Marvin timing side-channel — test-only dependency used to mint
     # throwaway local OIDC JWT fixtures; no production network-observable
     # private-key operation is exposed by this dependency.

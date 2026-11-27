@@ -14,6 +14,8 @@ publish = false
 layer = "substrates"
 
 [dependencies]
+crc32fast = { workspace = true }
+oem_cp = { workspace = true }
 # Event-level XML reader/writer. Chosen over a DOM crate deliberately: the
 # editor copies every event through untouched except the ones it targets, so
 # attribute order, namespace prefixes, and whitespace survive a round trip.
@@ -25,7 +27,7 @@ quick-xml = "0.41"
 printpdf = { version = "0.12", default-features = false }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 serde_json = "1"

@@ -276,11 +276,6 @@ jobs:
         run: bash scripts/ci/test-check-composition-budget.sh
       - name: Unit-test the dev-metrics tool
         run: python3 scripts/test_dev_metrics.py
-      - name: Validate changed-coverage policy
-        run: >-
-          python3 scripts/ci/reborn_changed_coverage.py
-          --manifest tests/integration/changed-coverage-exemptions.toml
-          --validate-manifest-only
       - name: Self-test exact release-binary smoke gate
         run: python3 -m unittest tests/test_smoke_release_binary.py
 
@@ -509,57 +504,6 @@ jobs:
         if: needs.changes.outputs.clippy_scope == 'full' && matrix.name == 'default'
         run: cargo clippy --all --lib --bins -- -D warnings
 
-  clippy-windows:
-    name: Clippy Windows (${{ matrix.name }})
-    needs: changes
-    if: needs.changes.outputs.has_code == 'true' && github.event_name == 'push'
-    runs-on: windows-latest
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.changes.outputs.clippy_matrix) }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
-        with:
-          persist-credentials: false
-      - name: Install Rust
-        uses: ./.github/actions/setup-rust
-        with:
-          components: clippy
-      - name: Enable pnpm for setup-node cache
-        if: contains(matrix.flags, '--all-features')
-        run: corepack enable pnpm
-      - name: Install Node.js for WebUI bundle builds
-        if: contains(matrix.flags, '--all-features')
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
-        with:
-          node-version: "22"
-          cache: "pnpm"
-          # See the webui-v2-js-lint job above for why this is a depth-tolerant
-          # glob list rather than a single literal.
-          cache-dependency-path: |
-            crates/product/ironclaw_webui/frontend/pnpm-lock.yaml
-            crates/*/*/ironclaw_webui/frontend/pnpm-lock.yaml
-      - name: Enable pnpm
-        if: contains(matrix.flags, '--all-features')
-        run: corepack enable pnpm
-      - name: Install WebUI frontend dependencies
-        if: contains(matrix.flags, '--all-features')
-        shell: bash
-        run: |
-          set -euo pipefail
-          webui_dir="$(bash scripts/ci/crate-dir.sh ironclaw_webui)"
-          cd "${webui_dir}/frontend"
-          pnpm install --frozen-lockfile
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          key: windows-${{ matrix.name }}
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-      - name: Check lints
-        run: cargo clippy --all --tests --examples ${{ matrix.flags }} -- -D warnings
-
   reborn-cli-smoke:
     name: Reborn CLI smoke tests
     needs: changes
@@ -643,7 +587,6 @@ jobs:
       - changes
       - fast-checks
       - clippy
-      - clippy-windows
       - reborn-cli-smoke
       - webui-v2-js-lint
       - docs-publication-boundary
@@ -707,16 +650,10 @@ jobs:
             exit 1
           fi
 
-          for job_result in \
-            "reborn-cli-smoke=${{ needs.reborn-cli-smoke.result }}" \
-            "clippy-windows=${{ needs.clippy-windows.result }}"; do
-            name="${job_result%%=*}"
-            result="${job_result##*=}"
-            if ! job_result_ok "$name" "$result" true "allow"; then
-              echo "$name failed: $result"
-              exit 1
-            fi
-          done
+          if ! job_result_ok "reborn-cli-smoke" "${{ needs.reborn-cli-smoke.result }}" true "allow"; then
+            echo "reborn-cli-smoke failed: ${{ needs.reborn-cli-smoke.result }}"
+            exit 1
+          fi
       - name: Assert the full clippy matrix ran (merge queue + push)
         if: needs.changes.outputs.clippy_scope == 'full' && github.event_name != 'pull_request'
         env:
