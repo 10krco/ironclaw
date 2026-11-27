@@ -258,7 +258,7 @@ SEL_V2 = {
     "admin_token_value": "code",
     "admin_token_description_text": "Copy this now — it will not be shown again.",
     "admin_create_token_button_name": "Create token",
-    "admin_current_role_button_name": "Current role",
+    "admin_current_role_name": "Current role",
     "admin_save_role_button_name": "Save role",
     "admin_member_role_name": "Member",
     "admin_admin_role_name": "Admin",

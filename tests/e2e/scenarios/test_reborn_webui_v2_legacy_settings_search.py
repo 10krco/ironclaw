@@ -107,6 +107,7 @@ async def _open_mocked_settings_page(
                     "user_id": "reborn-v2-e2e-user",
                     "capabilities": {"operator_webui_config": True},
                     "features": {"reborn_projects": False},
+                    "attachments": {},
                 },
             )
             return

@@ -287,7 +287,7 @@ the configuration:
 - **`github.event_name` in a reusable workflow is the caller's event** — it is
   never `workflow_call`. Conditions written as `github.event_name ==
   'workflow_call'` silently skip when invoked from nightly (this hid the
-  Windows/bench/docker deep coverage). Called workflows use the `deep` marker
+  bench and Docker checks). Called workflows use the `deep` marker
   input instead: it defaults to true and only materializes under
   `workflow_call`.
 - **A called workflow that references `secrets.*` needs those secrets passed at
@@ -359,11 +359,8 @@ points, including their existing optional DIND dispatch. The manual
 
 ## Known accepted gaps (deliberate, revisit as needed)
 
-- **Windows clippy** (`code_style.yml` `clippy-windows`) runs on push only;
-  **Windows build** (`platform-and-compat.yml` `windows-build`) runs on push
-  and in the nightly deep reuse. Windows-only breakage is accepted as
-  post-merge; the Linux full feature matrix catches the dominant class
-  (feature-gated cfg errors).
+- **Routine fork CI** runs on Linux amd64. The manual release compile
+  preflight is available separately from the fork's PR baseline.
 - **Benchmark compilation** (`cargo bench --no-run`) runs on push and nightly
   only, and the clippy lanes do not pass `--benches`. Bench targets exist only
   in `crates/substrates/ironclaw_safety` today.

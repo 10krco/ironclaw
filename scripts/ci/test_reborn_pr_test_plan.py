@@ -3063,23 +3063,6 @@ class RebornPrTestPlanTests(unittest.TestCase):
                             ["diff", "--name-only", *expected_range],
                         )
 
-    def test_windows_push_clippy_keeps_tests_and_examples_scope(self) -> None:
-        code_style = (ROOT / ".github/workflows/code_style.yml").read_text(
-            encoding="utf-8"
-        )
-        windows_scope = code_style.split("\n  clippy-windows:\n", 1)[1].split(
-            "\n  reborn-cli-smoke:\n", 1
-        )[0]
-        self.assertIn(
-            "if: needs.changes.outputs.has_code == 'true' && github.event_name == 'push'",
-            windows_scope,
-        )
-        self.assertIn(
-            "run: cargo clippy --all --tests --examples ${{ matrix.flags }} -- -D warnings",
-            windows_scope,
-        )
-        self.assertNotIn("--all-targets", windows_scope)
-
     def test_pr_workflows_do_not_repeat_reborn_rust_contracts(self) -> None:
         code_style = (ROOT / ".github/workflows/code_style.yml").read_text(
             encoding="utf-8"

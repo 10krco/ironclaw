@@ -51,7 +51,6 @@ from ws12_workflow_contracts import (  # noqa: E402
     validate_libsql_scripted_memory_job,
     validate_postgres_scripted_parity,
     validate_production_lint_targets,
-    validate_windows_webui_install_shell,
     validate_webui_frontend_sites,
     validate_workflow_texts,
 )
@@ -1327,22 +1326,6 @@ class WorkflowContractSabotageTests(unittest.TestCase):
             validate_production_lint_targets(self.workflows[CODE_STYLE_WORKFLOW]), []
         )
 
-    def test_windows_webui_install_step_requires_bash(self) -> None:
-        workflow = self.workflows[CODE_STYLE_WORKFLOW]
-        windows_job = job_body(workflow, "clippy-windows")
-        self.assertIsNotNone(windows_job)
-        self.assertEqual(validate_windows_webui_install_shell(workflow), [])
-
-        sabotaged_job = (windows_job or "").replace("        shell: bash\n", "")
-        self.assertNotEqual(sabotaged_job, windows_job)
-        sabotaged = dict(self.workflows)
-        sabotaged[CODE_STYLE_WORKFLOW] = workflow.replace(
-            windows_job or "", sabotaged_job, 1
-        )
-
-        errors = validate_workflow_texts(sabotaged)
-        self.assertTrue(any("must run" in error for error in errors), errors)
-
     def test_target_filters_on_the_production_lint_fail_loudly(self) -> None:
         """Every explicit target selector, in bare and value-bearing form.
 
@@ -1912,7 +1895,7 @@ class WebuiFrontendSiteSabotageTests(unittest.TestCase):
                 )
                 if following == WEBUI_NESTED_LOCKFILE_PATTERN:
                     pairs += 1
-        self.assertEqual(pairs, 10, "expected exactly 10 cache-dependency-path sites")
+        self.assertEqual(pairs, 9, "expected exactly 9 cache-dependency-path sites")
 
     def test_reintroducing_a_bare_cd_site_fails_loudly(self) -> None:
         """The exact pre-#7155 regression: a `cd` back to the flat literal."""

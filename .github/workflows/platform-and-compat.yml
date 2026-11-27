@@ -195,42 +195,6 @@ jobs:
               --test predicate_state_libsql_contract \
               -- --nocapture
 
-  windows-build:
-    name: Windows Build (${{ matrix.name }})
-    needs: changes
-    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.has_legacy_tests == 'true' && (github.event_name == 'push' || inputs.deep == true)
-    runs-on: windows-latest
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        # This job only runs on push / workflow_call (never on PR or
-        # merge_group), so it always builds the full feature matrix — no
-        # event-conditional SLIM/FULL indirection. Feature permutations are
-        # workspace-wide now that the v1 root package (and its
-        # html-to-markdown/bedrock/import features) is gone: `--all-features`
-        # enables every workspace member's features (including the heavy
-        # `bedrock` AWS lane), `default` builds the default set.
-        include:
-          - name: all-features
-            flags: "--all-features"
-          - name: default
-            flags: ""
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
-        with:
-          ref: ${{ inputs.ref || github.sha }}
-          persist-credentials: false
-      - name: Install Rust
-        uses: ./.github/actions/setup-rust
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          key: windows-${{ matrix.name }}
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-      - name: Check compilation
-        run: cargo check --all --benches --tests --examples ${{ matrix.flags }}
-
   wasm-wit-compat:
     name: WASM WIT Compatibility
     needs: changes
@@ -541,7 +505,6 @@ jobs:
     needs:
       - changes
       - hooks-parity-tests
-      - windows-build
       - wasm-wit-compat
       - bench-compile
       - docker-build
@@ -570,7 +533,6 @@ jobs:
           # one stable check name that branch rulesets can require.
           for job_result in \
             "hooks-parity-tests=${{ needs.hooks-parity-tests.result }}" \
-            "windows-build=${{ needs.windows-build.result }}" \
             "wasm-wit-compat=${{ needs.wasm-wit-compat.result }}" \
             "bench-compile=${{ needs.bench-compile.result }}" \
             "docker-build=${{ needs.docker-build.result }}" \

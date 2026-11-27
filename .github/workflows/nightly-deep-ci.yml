@@ -9,7 +9,6 @@ name: Nightly Deep CI
 # Cross-cutting platform and compatibility coverage is reused from
 # .github/workflows/platform-and-compat.yml:
 # - WASM/WIT compatibility checks
-# - Windows compile matrix
 # - benchmark compilation
 # - Docker image compilation remains disabled here via include_docker: false
 #
