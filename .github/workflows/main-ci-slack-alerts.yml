@@ -162,11 +162,11 @@ jobs:
 
           if [ -z "$webhooks" ]; then
             if [ "$EVENT_NAME" = "merge_group" ]; then
-              echo "::error::Set SLACK_WEBHOOK_URL to receive merge-queue failure alerts in the live-canary channel."
+              echo "::notice::Set SLACK_WEBHOOK_URL to receive merge-queue failure alerts in the live-canary channel."
             else
-              echo "::error::Set MAIN_CI_SLACK_WEBHOOK_URLS to receive main CI failure alerts."
+              echo "::notice::Set MAIN_CI_SLACK_WEBHOOK_URLS to receive main CI failure alerts."
             fi
-            exit 1
+            exit 0
           fi
 
           webhook_file="$(mktemp)"

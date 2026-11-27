@@ -5,8 +5,8 @@ a check belongs to exactly one tier on purpose.
 
 | Tier | Event | Job |
 |---|---|---|
-| PR feedback | `pull_request` | Fast, scoped signal for the author. May run slim matrices and path-scoped subsets. |
-| **Production gate** | `merge_group` (merge queue) | The authority on what reaches `main`. Runs affected deterministic checks for the combined candidate and widens to exhaustive deterministic checks for global, topology, or unclassified changes. |
+| **Fork production gate** | `pull_request` | Code Style (fmt + clippy), Tests (Reborn), Reborn E2E, and Platform & Compat. Runs checks selected for the PR, including the Linux image build when Docker inputs or the root Cargo manifest or lockfile change. |
+| Upstream queue compatibility | `merge_group` | Runs affected deterministic checks for the combined candidate when a repository uses a merge queue. |
 | Post-merge confirm | `push` to `main` | Runs the exhaustive deterministic tests and warms shared caches. A main-only deterministic failure means the affected-area classifier missed an impact and must be widened. |
 | Deep / scheduled | `schedule` (nightly) | Exhaustive suites too slow for the queue: legacy v1 matrix, full browser E2E, stress scans. |
 
@@ -31,7 +31,8 @@ and the merge-queue mutation gate, which restores it).
 
 ## The invariant
 
-**No attributable deterministic failure may be main-only.** The merge queue
+**No attributable deterministic failure may be main-only.** Direct pull
+requests gate the fork. Where enabled, the merge queue
 classifies the combined `base_sha...head_sha` diff, runs the union of affected
 packages and lanes, and widens to the exhaustive push shape whenever a changed
 path is global, changes workspace topology, or cannot be classified. This
@@ -330,7 +331,8 @@ resolve the PR number from GitHub's `gh-readonly-queue/main/pr-<number>-...`
 ref and include the PR title, author, and link.
 
 Main-branch alerts go to `secrets.MAIN_CI_SLACK_WEBHOOK_URLS`; the value may be
-a single webhook URL or multiple URLs separated by newlines or commas.
+a single webhook URL or multiple URLs separated by newlines or commas. With
+no webhook configured, the alert job records a notice and exits successfully.
 Merge-queue alerts go to `secrets.SLACK_WEBHOOK_URL`, the existing live-canary
 channel. This keeps post-merge CI alerts in their dedicated channels while
 making queue bounces visible alongside live-canary failures.

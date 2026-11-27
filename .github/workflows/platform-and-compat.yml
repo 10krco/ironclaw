@@ -134,7 +134,7 @@ jobs:
             echo "has_wasm_abi_risk=false" >> "$GITHUB_OUTPUT"
           fi
 
-          if has_match '^(Dockerfile|\.dockerignore$|docker/reborn/(entrypoint|start-sshd)\.sh$|\.github/workflows/platform-and-compat\.yml$)'; then
+          if has_match '^(Dockerfile|\.dockerignore$|Cargo\.(toml|lock)$|docker/reborn/(entrypoint|start-sshd)\.sh$|\.github/workflows/platform-and-compat\.yml$)'; then
             echo "has_docker_risk=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_docker_risk=false" >> "$GITHUB_OUTPUT"
@@ -302,18 +302,15 @@ jobs:
   docker-build:
     name: Docker Build
     needs: changes
-    # Dockerfile changes must not be a main-only failure: the merge queue
-    # builds the image when the merge group actually touches Docker inputs.
-    # The merge_group arm deliberately does not require has_legacy_tests —
-    # the scope classifier matches Docker inputs directly, so a merge group
-    # changing only .dockerignore or a Reborn startup script reports
-    # has_legacy_tests=false while has_docker_risk=true.
+    # Build before merge when a PR changes the image inputs or dependency graph.
+    # Docker inputs are classified separately from legacy test scope.
     if: >
       needs.changes.outputs.docs_only != 'true' &&
       ((needs.changes.outputs.has_legacy_tests == 'true' &&
         (github.event_name == 'push' ||
          (inputs.deep == true && inputs.include_docker))) ||
-       (github.event_name == 'merge_group' && needs.changes.outputs.has_docker_risk == 'true'))
+       ((github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
+        needs.changes.outputs.has_docker_risk == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
